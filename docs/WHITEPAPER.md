@@ -48,7 +48,7 @@ The operational ecosystem consists of two locked contracts and a DEX pair, launc
 | Term | Meaning |
 |---|---|
 | Locked contract | A contract deployed final: no owner, admin role, settable parameter, pause, upgrade or administrator withdrawal; every table and threshold is a constant or immutable. Staking principal and rewards remain withdrawable only through the fixed user-facing rules |
-| Ecosystem account | A fixed system address excluded from referral binding in either direction: the launch pair, PancakeSwap router, staking contract, deployment contract, dead address and `AIRDROP`; third-party pools are not in this fixed set and are handled by the sender-stake requirement |
+| Ecosystem account | A fixed system address excluded from referral binding in either direction: the launch pair, staking contract, deployment contract, dead address and `AIRDROP` |
 | Dead address | `0x000000000000000000000000000000000000dEaD`, which no key controls |
 | Staker | The beneficiary of a stake: the account whose active stake it is, whose reward ledger it feeds, to which the principal returns and whose uplines the stake's referral walk pays |
 | Payer | The caller of `stake`, whose LLGAME funds the stake; the staker itself in the common case |
@@ -90,13 +90,11 @@ function STAKING() external view returns (address);   // immutable, predicted at
 
 ## 4. Pool
 
-The launch pool is the canonical PancakeSwap v2 LLGAME/WBNB pair. The deployment contract resolves it in the activation transaction and funds it in rounds (section 7.2):
+The launch pool is the canonical PancakeSwap v2 LLGAME/WBNB pair. At close it holds:
 
-- The first round adds 1,000,000 LLGAME and its BNB; later rounds add BNB alone until the total reaches at least `POOL_BNB` wei. `POOL_BNB` is fixed before publication and may be selected to target approximately $10,000 at a reference BNB/USD quote. The actual USD value depends on the BNB/USD rate at close.
-- The activation pool receives 1,000,000 LLGAME, one part in 3.4 × 10^23 of the total supply. It is the initial DEX source of freely tradable LLGAME; the creators' principal is locked in staking, while reserve distributions occur only through the staking rules. Tokens subsequently circulate through ordinary transfers, staking payouts, referral payouts and any off-chain airdrops funded by matured `AIRDROP` withdrawals.
-- The launch LP tokens are held by the deployment contract during funding and sent to the dead address at close, so that position is locked without a locker contract or owner. Swap fees remain in the pair's reserves; the PancakeSwap protocol may separately mint `feeTo` LP shares under its own factory-controlled fee mechanism.
-- The pair address is computed by CREATE2 from the PancakeSwap factory, the predicted token address and WBNB, so it can be included in the staking contract's ecosystem-account set at creation.
-- Pools of LLGAME opened later by third parties are outside the fixed ecosystem-account exclusion set. On a buyer's first receipt directly from such a pool, the staking contract checks `activeStakeOf(pool)`: if it is zero, the buyer becomes an unbound root and the pool is not recorded as its referrer.
+- 1,000,000 LLGAME and at least `POOL_BNB` wei of BNB as WBNB. `POOL_BNB` is fixed before publication and may be selected to target approximately $10,000 at a reference BNB/USD quote. The actual USD value depends on the BNB/USD rate at close.
+- The 1,000,000 LLGAME are one part in 3.4 × 10^23 of the total supply. The pool is the initial DEX source of freely tradable LLGAME; the creators' principal is locked in staking, while reserve distributions occur only through the staking rules. Tokens subsequently circulate through ordinary transfers, staking payouts, referral payouts and any off-chain airdrops funded by matured `AIRDROP` withdrawals.
+- The launch LP tokens are held at the dead address, so that position is locked without a locker contract or owner. Swap fees remain in the pair's reserves; the PancakeSwap protocol may separately mint `feeTo` LP shares under its own factory-controlled fee mechanism.
 
 ## 5. Staking
 
@@ -212,10 +210,7 @@ contract Deployment {
     enum State { NotLaunched, Funding, Closed, Aborted }
 
     // Non-payable; the sender becomes PUBLISHER.
-    constructor(
-        address factory_, address router_, address wbnb_,
-        address authors_, address airdrop_, uint256 poolBnb_
-    );
+    constructor(address authors_, address airdrop_, uint256 poolBnb_);
 
     // A funding round: any sender, msg.value > 0, in NotLaunched or Funding.
     receive() external payable;
@@ -239,18 +234,17 @@ The first round is the activation transaction. It:
 - transfers `TOTAL_SUPPLY − POOL_SUPPLY − AUTHORS_SUPPLY` to the staking contract's predicted address;
 - deploys the staking contract with its reserve present and `excluded` fixed;
 - resolves the canonical pair, creating it if absent, and skims its WBNB balance to `DEAD`;
-- adds `POOL_SUPPLY` LLGAME and the round's BNB as WBNB, minting the launch LP tokens to the deployment contract;
 - opens the creators' 1080-day stake for `AUTHORS`;
-- verifies the total supply, the balance split, the creators' stake and an empty deployment-contract token balance;
+- verifies the total supply, the balance split, the creators' stake and a deployment-contract token balance of `POOL_SUPPLY`;
 - enters `Funding`.
 
-Each later round wraps its BNB, transfers it to the pair and synchronises the reserves.
+Every round, the first included, adds its BNB to the pool with LLGAME in proportion to it, `POOL_SUPPLY` per `POOL_BNB`, minting LP tokens to the deployment contract. The deployment contract holds the rest of `POOL_SUPPLY` until full funding.
 
-The round that brings `funded()` to at least `POOL_BNB` sends the launch LP tokens to `DEAD` and enters `Closed`. A first round of at least `POOL_BNB` launches and closes in one transaction.
+The round that brings `funded()` to at least `POOL_BNB` adds the rest of `POOL_SUPPLY`, sends the launch LP tokens to `DEAD` and enters `Closed`. A first round of at least `POOL_BNB` launches and closes in one transaction.
 
 ### 7.3 Abort
 
-In `Funding`, `abort` removes the liquidity of the launch LP tokens, burns the LLGAME received, unwraps the WBNB received as `withdrawn` and enters `Aborted`. Each funder's `refund` pays `floor(withdrawn × depositOf(funder) / funded())` once. The token and staking contract remain as launched.
+In `Funding`, `abort` removes the liquidity of the launch LP tokens, burns the LLGAME received and the LLGAME still held, unwraps the WBNB received as `withdrawn` and enters `Aborted`. Each funder's `refund` pays `floor(withdrawn × depositOf(funder) / funded())` once. The token and staking contract remain as launched.
 
 ### 7.4 Guarantees
 
@@ -285,7 +279,7 @@ After `Closed` the deployment contract holds no value and is inert. After `Abort
 | Reward rates | 30%, 72% and 288% of principal over the respective terms |
 | Reward release | Linear over the stake term, claimable by the staker as it accrues |
 | Pool | PancakeSwap v2 LLGAME/WBNB pair; launch LP position sent to `DEAD` at close |
-| Funding | Rounds totalling at least `POOL_BNB` wei, all entering the pool; the first adds `POOL_SUPPLY`, later ones BNB alone |
+| Funding | Rounds totalling at least `POOL_BNB` wei, each entering the pool with LLGAME in proportion to its BNB, `POOL_SUPPLY` per `POOL_BNB` |
 | Unpaid referral remainder | Any non-zero remainder is recorded immediately as an `AIRDROP` stake, with the originating stake's term, the ordinary reward and no referral budget |
 
 ### 8.2 Values fixed before publication
@@ -295,9 +289,8 @@ Every value in this table must be final before the deployment contract is publis
 | Parameter | Meaning | Requirement |
 |---|---|---|
 | `AUTHORS` | Ordinary address that receives the creators' stake | Non-zero; not in the staking contract's `excluded` set; must be an EOA or a smart wallet able to call the staking contract |
-| `AIRDROP` | Special address for referral-remainder stakes | Non-zero; distinct from `AUTHORS`, the token, pair, staking contract, deployment contract, `DEAD`, factory, router and WBNB; included in `excluded`; must be an EOA or a smart wallet able to call the staking contract |
+| `AIRDROP` | Special address for referral-remainder stakes | Non-zero; distinct from `AUTHORS`, the token, pair, staking contract, deployment contract, `DEAD`, factory and WBNB; included in `excluded`; must be an EOA or a smart wallet able to call the staking contract |
 | `POOL_BNB` | Minimum total BNB in wei of all funding rounds | Fixed positive integer amount |
-| PancakeSwap addresses | Factory, router and WBNB contract addresses for the target BSC deployment | Fixed and verified against the intended network |
 
 ## 9. Reserve accounting
 
@@ -317,7 +310,7 @@ The referral allocation is fully accounted for at stake time. Shares paid to eli
 
 ### 9.2 Reserve immediately after activation
 
-The token constructor mints the whole supply to the deployment contract, which transfers `TOTAL_SUPPLY − POOL_SUPPLY − AUTHORS_SUPPLY` to the staking contract. During activation, the deployment contract transfers `POOL_SUPPLY` to the pair and opens the creators' stake for `AUTHORS`.
+The token constructor mints the whole supply to the deployment contract, which transfers `TOTAL_SUPPLY − POOL_SUPPLY − AUTHORS_SUPPLY` to the staking contract. During activation, the deployment contract keeps `POOL_SUPPLY` for the pool and opens the creators' stake for `AUTHORS`.
 
 The creators' stake follows the ordinary 1080-day rules. Since `AUTHORS` begins as an unbound root, it has no upline at activation; the full 50,000 LLGAME referral allocation therefore becomes an `AIRDROP` stake with its own 144,000 LLGAME reward. The creators' stake also allocates its 720,000 LLGAME reward. The unallocated reserve after activation is consequently:
 

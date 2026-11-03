@@ -30,7 +30,6 @@ contract LLGAMEStaking {
     IERC20 public immutable TOKEN;
     address public immutable AIRDROP;
     address private immutable PAIR;
-    address private immutable ROUTER;
     address private immutable DEPLOYMENT;
 
     uint256 public reserve;                         // the unallocated stake reserve
@@ -53,11 +52,10 @@ contract LLGAMEStaking {
     error NotMatured();
 
     /// @dev Deployed by the deployment contract after the initial reserve has been transferred to this address.
-    constructor(IERC20 token_, address airdrop_, address pair_, address router_) {
+    constructor(IERC20 token_, address airdrop_, address pair_) {
         TOKEN = token_;
         AIRDROP = airdrop_;
         PAIR = pair_;
-        ROUTER = router_;
         DEPLOYMENT = msg.sender;
         reserve = token_.balanceOf(address(this));
     }
@@ -66,8 +64,8 @@ contract LLGAMEStaking {
 
     /// @notice The fixed ecosystem-account set, excluded from referral binding in either direction.
     function excluded(address account) public view returns (bool) {
-        return account == PAIR || account == ROUTER || account == address(this) || account == DEPLOYMENT
-            || account == DEAD || account == AIRDROP;
+        return account == PAIR || account == address(this) || account == DEPLOYMENT || account == DEAD
+            || account == AIRDROP;
     }
 
     function stakeInfo(uint256 stakeId) external view returns (StakeInfo memory) {
@@ -151,7 +149,7 @@ contract LLGAMEStaking {
         returns (uint256 delegatedStakeId)
     {
         StakeInfo storage s = _stakes[stakeId];
-        if (s.staker != msg.sender) revert NotStaker();
+        if (s.staker != msg.sender || msg.sender == AIRDROP) revert NotStaker(); // AIRDROP stakes are not delegable
         uint256 principal = s.principal;
         if (principal == 0) revert Withdrawn();
         if (amount == 0 || amount > principal) revert InvalidAmount();

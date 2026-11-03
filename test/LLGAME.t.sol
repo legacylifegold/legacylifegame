@@ -45,11 +45,12 @@ contract LLGAMETest is Test {
     uint256 constant TOTAL = 340_000_000_000_000_000_000_000_000_000 * U;
     uint256 constant POOL_BNB = 10 ether;
     address constant DEAD = 0x000000000000000000000000000000000000dEaD;
+    address constant BSC_FACTORY = 0xcA143Ce32Fe78f1f7019d7d551a6402fC5350c73;
+    address constant BSC_WBNB = 0xbb4CdB9CBd36B01bD1cBaEBF2De08d9173bc095c;
 
     address publisher = makeAddr("publisher");
     address authors = makeAddr("authors");
     address airdrop = makeAddr("airdrop");
-    address router = makeAddr("router");
     address alice = makeAddr("alice");
     address bob = makeAddr("bob");
     address carol = makeAddr("carol");
@@ -64,10 +65,15 @@ contract LLGAMETest is Test {
 
     function setUp() public {
         vm.warp(1_700_000_000);
-        wbnb = new WBNB9();
-        factory = IFactory(deployCode("PancakeFactory.sol:PancakeFactory", abi.encode(address(this))));
+        // the deployment contract hardcodes the BSC mainnet factory and WBNB: place local copies there
+        vm.etch(BSC_WBNB, address(new WBNB9()).code);
+        wbnb = WBNB9(BSC_WBNB);
+        deployCodeTo("PancakeFactory.sol:PancakeFactory", abi.encode(address(this)), BSC_FACTORY);
+        factory = IFactory(BSC_FACTORY);
         vm.prank(publisher);
-        dep = new LLGAMEDeployment(address(factory), router, address(wbnb), authors, airdrop, POOL_BNB);
+        dep = new LLGAMEDeployment(authors, airdrop, POOL_BNB);
+        assertEq(address(dep.FACTORY()), BSC_FACTORY);
+        assertEq(address(dep.WBNB()), BSC_WBNB);
     }
 
     function _fund(address who, uint256 v) internal {
@@ -122,8 +128,10 @@ contract LLGAMETest is Test {
         assertEq(token.decimals(), 9);
         assertEq(token.totalSupply(), TOTAL);
         assertEq(token.STAKING(), address(staking));
-        assertEq(token.balanceOf(address(pair)), 1_000_000 * U);
-        assertEq(token.balanceOf(address(dep)), 0);
+        // 0.1 of 10 BNB: the pool gets 1% of POOL_SUPPLY, the rest is held until close
+        assertEq(token.balanceOf(address(pair)), 10_000 * U);
+        assertEq(token.balanceOf(address(dep)), 990_000 * U);
+        assertEq(dep.poolSupplied(), 10_000 * U);
         assertEq(token.balanceOf(address(staking)), TOTAL - 1_000_000 * U);
         assertGt(pair.balanceOf(address(dep)), 0);
         assertEq(wbnb.balanceOf(address(pair)), 0.1 ether);
@@ -158,21 +166,30 @@ contract LLGAMETest is Test {
         assertEq(wbnb.balanceOf(p), 0.1 ether);
     }
 
+    function _poolLlgame() internal view returns (uint256) {
+        (uint112 r0, uint112 r1,) = pair.getReserves();
+        return pair.token0() == address(token) ? r0 : r1;
+    }
+
     function test_roundsAndClose() public {
         _launch(1 ether);
-        (uint112 r0, uint112 r1,) = pair.getReserves();
-        uint256 llBefore = pair.token0() == address(token) ? r0 : r1;
+        assertEq(_poolLlgame(), 100_000 * U);
+        uint256 lp1 = pair.balanceOf(address(dep));
         _fund(alice, 4 ether);
+        assertEq(_poolLlgame(), 500_000 * U, "LLGAME in proportion to BNB");
+        assertEq(token.balanceOf(address(dep)), 500_000 * U, "rest held until close");
+        assertApproxEqRel(pair.balanceOf(address(dep)), lp1 * 5, 1e12, "LP grows with the pool");
         _fund(bob, 3 ether);
+        assertEq(_poolLlgame(), 800_000 * U);
         assertEq(uint8(dep.state()), uint8(LLGAMEDeployment.State.Funding));
-        uint256 lp = pair.balanceOf(address(dep));
-        _fund(carol, 5 ether); // overshoots POOL_BNB: all of it enters the pool
+        _fund(carol, 5 ether); // overshoots POOL_BNB: all of it enters the pool with the held rest
         assertEq(uint8(dep.state()), uint8(LLGAMEDeployment.State.Closed));
         assertEq(dep.funded(), 13 ether);
         assertEq(wbnb.balanceOf(address(pair)), 13 ether);
-        (r0, r1,) = pair.getReserves();
-        assertEq(pair.token0() == address(token) ? r0 : r1, llBefore, "rounds add BNB alone");
-        assertEq(pair.balanceOf(DEAD), lp);
+        assertEq(_poolLlgame(), 1_000_000 * U);
+        assertEq(token.balanceOf(address(dep)), 0);
+        assertEq(dep.poolSupplied(), 1_000_000 * U);
+        assertGt(pair.balanceOf(DEAD), 0);
         assertEq(pair.balanceOf(address(dep)), 0);
 
         vm.deal(dave, 1 ether);
@@ -182,6 +199,22 @@ contract LLGAMETest is Test {
         vm.prank(publisher);
         vm.expectRevert(LLGAMEDeployment.InvalidState.selector);
         dep.abort();
+    }
+
+    function test_constructorRejectsFixedAddresses() public {
+        address[4] memory fixedAddrs = [address(0), DEAD, BSC_FACTORY, BSC_WBNB];
+        for (uint256 i; i < fixedAddrs.length; i++) {
+            vm.expectRevert(LLGAMEDeployment.InvalidParameter.selector);
+            new LLGAMEDeployment(fixedAddrs[i], airdrop, POOL_BNB);
+            vm.expectRevert(LLGAMEDeployment.InvalidParameter.selector);
+            new LLGAMEDeployment(authors, fixedAddrs[i], POOL_BNB);
+        }
+        vm.expectRevert(LLGAMEDeployment.InvalidParameter.selector);
+        new LLGAMEDeployment(authors, authors, POOL_BNB);
+        vm.expectRevert(LLGAMEDeployment.InvalidParameter.selector);
+        new LLGAMEDeployment(authors, airdrop, 0);
+        vm.expectRevert(LLGAMEDeployment.InvalidParameter.selector);
+        new LLGAMEDeployment(authors, airdrop, uint256(type(uint112).max) + 1);
     }
 
     function test_launchAndCloseInOneRound() public {
@@ -202,7 +235,8 @@ contract LLGAMETest is Test {
         vm.prank(publisher);
         dep.abort();
         assertEq(uint8(dep.state()), uint8(LLGAMEDeployment.State.Aborted));
-        assertLt(token.totalSupply(), supplyBefore, "pool LLGAME burned");
+        // the held 600,000 LLGAME and the pool's LLGAME are burned
+        assertLt(token.totalSupply(), supplyBefore - 600_000 * U, "pool and held LLGAME burned");
         assertEq(token.balanceOf(address(dep)), 0);
 
         uint256 w = dep.withdrawn();

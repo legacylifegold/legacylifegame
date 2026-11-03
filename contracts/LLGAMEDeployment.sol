@@ -27,8 +27,10 @@ interface IWBNB {
 }
 
 /// @title LLGAME deployment contract
-/// @notice Launches the ecosystem on its first funding round, takes further rounds into the pool and
-///         closes when funding reaches at least POOL_BNB. Its only privileged call is PUBLISHER's abort.
+/// @notice Launches the ecosystem on its first funding round and closes when funding reaches at least
+///         POOL_BNB. Every round adds its BNB to the pool with LLGAME in proportion to it, at the fixed
+///         launch ratio POOL_SUPPLY / POOL_BNB; the deployment contract holds the rest of POOL_SUPPLY
+///         until close. Its only privileged call is PUBLISHER's abort.
 contract LLGAMEDeployment {
     enum State { NotLaunched, Funding, Closed, Aborted }
 
@@ -37,9 +39,9 @@ contract LLGAMEDeployment {
     uint256 private constant AUTHORS_SUPPLY = 250_000e9;
     uint32 private constant AUTHORS_TERM = 1080;
 
-    IPancakeFactory public immutable FACTORY;
-    address public immutable ROUTER;
-    IWBNB public immutable WBNB;
+    /// @dev PancakeSwap v2 factory and WBNB on BNB Smart Chain mainnet.
+    IPancakeFactory public constant FACTORY = IPancakeFactory(0xcA143Ce32Fe78f1f7019d7d551a6402fC5350c73);
+    IWBNB public constant WBNB = IWBNB(0xbb4CdB9CBd36B01bD1cBaEBF2De08d9173bc095c);
     address public immutable AUTHORS;
     address public immutable AIRDROP;
     uint256 public immutable POOL_BNB;
@@ -50,6 +52,7 @@ contract LLGAMEDeployment {
     LLGAMEStaking public staking;
     IPancakePair public pair;
     uint256 public funded;          // BNB of all rounds
+    uint256 public poolSupplied;    // LLGAME added to the pool, min(POOL_SUPPLY, POOL_SUPPLY × funded / POOL_BNB)
     uint256 public withdrawn;       // BNB recovered by an abort
     mapping(address => uint256) public depositOf;
 
@@ -61,15 +64,14 @@ contract LLGAMEDeployment {
     error LaunchCheckFailed();
     error RefundFailed();
 
-    /// @dev Non-payable; the sender becomes PUBLISHER.
-    constructor(address factory_, address router_, address wbnb_, address authors_, address airdrop_, uint256 poolBnb_) {
+    /// @dev Non-payable; the sender becomes PUBLISHER. AUTHORS and AIRDROP must be distinct accounts and
+    ///      neither may be a fixed address known at publication: zero, DEAD, FACTORY or WBNB. The token,
+    ///      pair and staking contract do not exist before activation and are not checked.
+    constructor(address authors_, address airdrop_, uint256 poolBnb_) {
         if (
-            factory_ == address(0) || router_ == address(0) || wbnb_ == address(0) || authors_ == address(0)
-                || airdrop_ == address(0) || authors_ == airdrop_ || poolBnb_ == 0 || poolBnb_ > type(uint112).max
+            _isFixed(authors_) || _isFixed(airdrop_) || authors_ == airdrop_ || poolBnb_ == 0
+                || poolBnb_ > type(uint112).max
         ) revert InvalidParameter();
-        FACTORY = IPancakeFactory(factory_);
-        ROUTER = router_;
-        WBNB = IWBNB(wbnb_);
         AUTHORS = authors_;
         AIRDROP = airdrop_;
         POOL_BNB = poolBnb_;
@@ -83,18 +85,21 @@ contract LLGAMEDeployment {
 
         State current = state;
         if (current == State.NotLaunched) _launch();
-        else if (current == State.Funding) _addBnb();
-        else revert InvalidState();
+        else if (current != State.Funding) revert InvalidState();
 
         funded += msg.value;
         depositOf[msg.sender] += msg.value;
+        _addLiquidity();
+
         if (funded >= POOL_BNB) {
+            if (token.balanceOf(address(this)) != 0) revert LaunchCheckFailed();
             pair.transfer(DEAD, pair.balanceOf(address(this)));
             state = State.Closed;
         }
     }
 
-    /// @notice PUBLISHER only, in Funding: removes the launch liquidity, burns its LLGAME, keeps its BNB for refunds.
+    /// @notice PUBLISHER only, in Funding: removes the launch liquidity, burns its LLGAME and the held rest of
+    ///         POOL_SUPPLY, keeps its BNB for refunds.
     function abort() external {
         if (msg.sender != PUBLISHER) revert NotPublisher();
         if (state != State.Funding) revert InvalidState();
@@ -135,21 +140,17 @@ contract LLGAMEDeployment {
         address p = FACTORY.getPair(address(t), address(WBNB));
         if (p == address(0)) p = FACTORY.createPair(address(t), address(WBNB));
 
-        LLGAMEStaking s = new LLGAMEStaking(t, AIRDROP, p, ROUTER);
+        LLGAMEStaking s = new LLGAMEStaking(t, AIRDROP, p);
         if (address(s) != predictedStaking) revert AddressMismatch();
 
         // Before the token existed the pair could hold only an unsynchronised WBNB balance.
         IPancakePair(p).skim(DEAD);
-        t.transfer(p, POOL_SUPPLY);
-        WBNB.deposit{value: msg.value}();
-        WBNB.transfer(p, msg.value);
-        IPancakePair(p).mint(address(this));
 
         t.approve(address(s), AUTHORS_SUPPLY);
         s.stake(AUTHORS_SUPPLY, AUTHORS_TERM, AUTHORS);
 
         if (
-            t.totalSupply() != total || t.balanceOf(address(this)) != 0 || t.balanceOf(p) != POOL_SUPPLY
+            t.totalSupply() != total || t.balanceOf(address(this)) != POOL_SUPPLY || t.balanceOf(p) != 0
                 || t.balanceOf(address(s)) != total - POOL_SUPPLY || s.activeStakeOf(AUTHORS) != AUTHORS_SUPPLY
         ) revert LaunchCheckFailed();
 
@@ -159,11 +160,24 @@ contract LLGAMEDeployment {
         state = State.Funding;
     }
 
-    function _addBnb() private {
+    /// @dev Adds the round's BNB and the LLGAME that brings the pool's share of POOL_SUPPLY to
+    ///      min(POOL_SUPPLY, POOL_SUPPLY × funded / POOL_BNB), minting LP tokens to this contract.
+    ///      Computed from the cumulative total, so rounding never drifts and the round reaching
+    ///      POOL_BNB adds the whole held rest. A round minting no LP tokens reverts in the pair.
+    function _addLiquidity() private {
         IPancakePair p = pair;
+        uint256 target = funded >= POOL_BNB ? POOL_SUPPLY : POOL_SUPPLY * funded / POOL_BNB;
+        uint256 amount = target - poolSupplied;
+        poolSupplied = target;
+
+        if (amount != 0) token.transfer(address(p), amount);
         WBNB.deposit{value: msg.value}();
         WBNB.transfer(address(p), msg.value);
-        p.sync();
+        p.mint(address(this));
+    }
+
+    function _isFixed(address account) private pure returns (bool) {
+        return account == address(0) || account == DEAD || account == address(FACTORY) || account == address(WBNB);
     }
 
     /// @dev RLP address of a CREATE from this contract for nonce 1..127.
