@@ -394,6 +394,19 @@ contract LLGAMETest is Test {
         _launch(10 ether);
         _buy(alice, 1 ether);
         uint256 id = _stake(alice, 1_000 * U, 360, alice);
+
+        uint256 minAmount = 96_000_000;
+
+        // delegated amount below the minimum
+        vm.prank(alice);
+        vm.expectRevert(LLGAMEStaking.InvalidAmount.selector);
+        staking.delegateStake(id, minAmount - 1, bob);
+
+        // remaining amount below the minimum
+        vm.prank(alice);
+        vm.expectRevert(LLGAMEStaking.InvalidAmount.selector);
+        staking.delegateStake(id, 1_000 * U - (minAmount - 1), bob);
+
         vm.warp(block.timestamp + 180 days);
 
         uint256 b0 = token.balanceOf(alice);
@@ -401,26 +414,49 @@ contract LLGAMETest is Test {
         uint256 did = staking.delegateStake(id, 250 * U, bob);
         assertEq(token.balanceOf(alice) - b0, 360 * U, "accrued reward paid before split");
         assertEq(staking.referrerOf(bob), alice);
+
         LLGAMEStaking.StakeInfo memory o = staking.stakeInfo(id);
         LLGAMEStaking.StakeInfo memory d = staking.stakeInfo(did);
         assertEq(o.principal, 750 * U);
         assertEq(d.principal, 250 * U);
         assertEq(uint256(o.reward) + d.reward, 720 * U);
+        assertEq(uint256(o.claimed) + d.claimed, 360 * U);
         assertEq(d.start, o.start);
+        assertEq(d.term, o.term);
         assertEq(staking.claimable(did), 0);
+        assertEq(staking.activeStakeOf(alice), 750 * U);
         assertEq(staking.activeStakeOf(bob), 250 * U);
 
-        // full delegation of the rest
+        // full delegation of the rest: reuse the existing stake record
+        uint256 nextId = staking.nextStakeId();
+
         vm.prank(alice);
         uint256 did2 = staking.delegateStake(id, 750 * U, carol);
-        assertEq(staking.stakeInfo(id).principal, 0);
+
+        assertEq(did2, id);
+        assertEq(staking.nextStakeId(), nextId, "no new stake record");
+
+        LLGAMEStaking.StakeInfo memory reassigned = staking.stakeInfo(id);
+        assertEq(reassigned.staker, carol);
+        assertEq(reassigned.principal, 750 * U);
+        assertEq(reassigned.reward, 540 * U);
+        assertEq(reassigned.claimed, 270 * U);
+        assertEq(reassigned.start, o.start);
+        assertEq(reassigned.term, o.term);
+
+        assertEq(staking.referrerOf(carol), alice);
         assertEq(staking.activeStakeOf(alice), 0);
+        assertEq(staking.activeStakeOf(bob), 250 * U);
+        assertEq(staking.activeStakeOf(carol), 750 * U);
 
         vm.warp(block.timestamp + 180 days);
+
         b0 = token.balanceOf(carol);
         vm.prank(carol);
         staking.withdraw(did2);
         assertEq(token.balanceOf(carol) - b0, 750 * U + 270 * U);
+
+        assertEq(staking.activeStakeOf(carol), 0);
         _assertSolvent();
     }
 

@@ -109,8 +109,8 @@ contract LLGAMEStaking {
 
     function _stake(uint256 amount, uint32 term, address beneficiary) private returns (uint256 stakeId) {
         // 1. checks
-        if (amount == 0) revert InvalidAmount();
         uint256 rate = _rate(term);
+        if (amount < _minStakeAmount(term)) revert InvalidAmount();
         if (beneficiary == address(0) || (excluded(beneficiary) && beneficiary != AIRDROP)) revert InvalidBeneficiary();
 
         // 2. allocate the reward and the referral budget
@@ -144,38 +144,52 @@ contract LLGAMEStaking {
         }
     }
 
-    function delegateStake(uint256 stakeId, uint256 amount, address delegateAddress)
-        external
-        returns (uint256 delegatedStakeId)
-    {
+    function delegateStake(uint256 stakeId, uint256 amount, address delegateAddress) external returns (uint256 delegatedStakeId) {
         StakeInfo storage s = _stakes[stakeId];
         if (s.staker != msg.sender || msg.sender == AIRDROP) revert NotStaker(); // AIRDROP stakes are not delegable
+
         uint256 principal = s.principal;
         if (principal == 0) revert Withdrawn();
-        if (amount == 0 || amount > principal) revert InvalidAmount();
-        if (
-            delegateAddress == address(0) || delegateAddress == msg.sender
-                || (excluded(delegateAddress) && delegateAddress != AIRDROP)
+        if (amount > principal) revert InvalidAmount();
+
+        // Both the delegated amount and the remainder must meet the minimum.
+        uint256 minAmount = _minStakeAmount(s.term);
+        if (amount < minAmount || (amount < principal && principal - amount < minAmount)) {
+            revert InvalidAmount();
+        }
+
+        if (delegateAddress == address(0) || delegateAddress == msg.sender
+            || (excluded(delegateAddress) && delegateAddress != AIRDROP)
         ) revert InvalidBeneficiary();
 
+        // Settle accrued rewards before changing ownership or splitting the stake.
         _claim(s);
         _see(delegateAddress, msg.sender);
 
-        uint256 dReward = uint256(s.reward) * amount / principal;
-        uint256 dClaimed = uint256(s.claimed) * amount / principal;
-        s.principal = (principal - amount).toUint128();
-        s.reward -= dReward.toUint128();
-        s.claimed -= dClaimed.toUint128();
+        if (amount == principal) {
+            // Full delegation: reuse the existing stake record.
+            s.staker = delegateAddress;
+            delegatedStakeId = stakeId;
+        } else {
+            // Partial delegation: split the existing stake proportionally.
+            uint256 dReward = uint256(s.reward) * amount / principal;
+            uint256 dClaimed = uint256(s.claimed) * amount / principal;
 
-        delegatedStakeId = nextStakeId++;
-        _stakes[delegatedStakeId] = StakeInfo({
-            staker: delegateAddress,
-            start: s.start,
-            term: s.term,
-            principal: amount.toUint128(),
-            reward: dReward.toUint128(),
-            claimed: dClaimed.toUint128()
-        });
+            s.principal = (principal - amount).toUint128();
+            s.reward -= dReward.toUint128();
+            s.claimed -= dClaimed.toUint128();
+
+            delegatedStakeId = nextStakeId++;
+            _stakes[delegatedStakeId] = StakeInfo({
+                staker: delegateAddress,
+                start: s.start,
+                term: s.term,
+                principal: amount.toUint128(),
+                reward: dReward.toUint128(),
+                claimed: dClaimed.toUint128()
+            });
+        }
+
         activeStakeOf[msg.sender] -= amount;
         activeStakeOf[delegateAddress] += amount;
 
@@ -211,6 +225,13 @@ contract LLGAMEStaking {
     }
 
     // -------------------------------------------------------------- internals
+
+    function _minStakeAmount(uint32 term) private pure returns (uint256) {
+        if (term == 180) return 115_200_000;
+        if (term == 360) return 96_000_000;
+        if (term == 1080) return 72_000_000;
+        revert InvalidTerm();
+    }
 
     function _rate(uint32 term) private pure returns (uint256) {
         if (term == 180) return 30;

@@ -100,6 +100,14 @@ The launch pool is the canonical PancakeSwap v2 LLGAME/WBNB pair. At close it ho
 
 A holder stakes an amount `A` for a term of 180, 360 or 1080 days, with `stake(amount, term, beneficiary)`. The caller is the payer: the amount is pulled from its balance. The beneficiary is the staker: the stake belongs to that account. In the common case, the caller names itself, but anyone can open a stake for anyone else. The staking contract allocates at stake time, out of the stake reserve, everything the stake will ever cost; a stake that the reserve cannot cover reverts. Its constructor initializes the unallocated reserve from `TOKEN.balanceOf(address(this))`. Later direct LLGAME transfers to the staking address are not treated as reserve deposits; without an explicit stake call they remain unaccounted surplus and cannot be withdrawn.
 
+Every public `stake` or `stakeWithPermit` call must meet the term-specific minimum principal:
+
+- **0.1152 LLGAME** for 180 days,
+- **0.096 LLGAME** for 360 days,
+-  **0.072 LLGAME** for 1080 days.
+
+ These limits target an average accrued reward of at least one base unit per average BSC block, using the documented 0.45-second average block interval. The minimum applies to public stake calls; the internally created referral-remainder `AIRDROP` stake described in section 5.2 is exempt.
+
 | Allocation at stake time | Amount | Destination |
 |---|---|---|
 | Reward | 30%, 72% or 288% of `A` for the three terms, that is 5%, 6% or 8% of `A` per 30 days, rising with the term | The staker's reward ledger, released linearly over the term |
@@ -152,7 +160,7 @@ function referrerOf(address account) external view returns (address); // zero fo
 
 `stake(amount, term, beneficiary)` runs these steps in this order; any failing check reverts the whole call:
 
-1. Check `amount > 0`, `term` in {180, 360, 1080} days and that `beneficiary` is neither the zero address nor any ecosystem account other than `AIRDROP`. The caller must also choose a beneficiary able to call `claim` and `withdraw`; the contract cannot generically verify that an arbitrary smart wallet supports those calls.
+1. Check that `term` is in {180, 360, 1080} days, `amount` is at least the corresponding minimum principal in section 8.1, and `beneficiary` is neither the zero address nor any ecosystem account other than `AIRDROP`. The caller must also choose a beneficiary able to call `claim` and `withdraw`; the contract cannot generically verify that an arbitrary smart wallet supports those calls.
 2. Allocate the reward and the referral budget from the stake reserve; revert when the reserve is short.
 3. Write the ordinary stake under the beneficiary: `stakeId`, the amount, the term, the stake block and the allocated reward; add the amount to `activeStakeOf[beneficiary]`. This stake ledger and the reserve allocation are recorded before the principal transfer.
 4. Pull `amount` from the payer: `transferFrom(msg.sender, staking, amount)`. The recipient is an ecosystem account, so the transfer does not create a referral binding.
@@ -166,7 +174,7 @@ The binding of step 5 keeps the referral forest acyclic: a binding is written on
 
 `delegateStake(stakeId, amount, delegateAddress)` splits an ordinary stake and hands the split part to another account. It runs these steps in this order; any failing check reverts the whole call:
 
-1. Check that the caller is the stake's staker, its principal is not withdrawn, `0 < amount ≤ principal`, and `delegateAddress` is neither the zero address, the caller nor any ecosystem account other than `AIRDROP`.
+1. Check that the caller is the stake's staker, its principal is not withdrawn, `amount` is at least the minimum principal for the stake's term, and `amount ≤ principal`. If `amount < principal`, the principal remaining in the original stake must also be at least that minimum. Check also that `delegateAddress` is neither the zero address, the caller nor any ecosystem account other than `AIRDROP`.
 2. Pay the caller the stake's accrued, unclaimed reward, as `claim` does, so that the reward accrued before delegation stays with the caller.
 3. When `delegateAddress` has never been seen, mark it seen and, unless the caller is `AIRDROP`, bind it to the caller as its referrer. The caller holds the stake being split, so `activeStakeOf(caller) > 0` holds. A delegate already seen keeps its existing binding or root status.
 4. Write a new ordinary stake under the delegate with principal `amount`, the original term and stake block, reward allocation `floor(reward × amount / principal)` and claimed amount `floor(claimed × amount / principal)`; the original stake keeps the remainders of principal, reward and claimed amount. Move `amount` from `activeStakeOf[caller]` to `activeStakeOf[delegate]`.
@@ -276,6 +284,7 @@ After `Closed` the deployment contract holds no value and is inert. After `Abort
 | Referral binding | On first receipt, the sender must have `activeStakeOf(sender) > 0` and neither endpoint may be in `excluded`; the same test applies to the payer when binding an unseen stake beneficiary |
 | Referral payout eligibility | `balanceOf(upline) + activeStakeOf(upline) >= A << (n−1)`, `balanceOf(upline) > 0` and `activeStakeOf(upline) > 0` at every level `n` |
 | Staking terms | 180, 360 and 1080 days |
+| Minimum ordinary stake principal | 115,200,000 base units (180 days); 96,000,000 base units (360 days); 72,000,000 base units (1080 days). Applies to public `stake` / `stakeWithPermit` calls and delegated stake portions; internally created `AIRDROP` referral-remainder stakes are exempt |
 | Reward rates | 30%, 72% and 288% of principal over the respective terms |
 | Reward release | Linear over the stake term, claimable by the staker as it accrues |
 | Pool | PancakeSwap v2 LLGAME/WBNB pair; launch LP position sent to `DEAD` at close |
@@ -354,3 +363,4 @@ At the intended reference price of about $0.01 per LLGAME at close, the smallest
 4. `PancakePair` source: `MINIMUM_LIQUIDITY`, `mint(to)`, `skim(to)` and reserve accounting. https://github.com/pancakeswap/pancake-swap-core/blob/master/contracts/PancakePair.sol
 5. `PancakeFactory` source: `createPair` uses CREATE2 and does not require either token address to contain token code. https://github.com/pancakeswap/pancake-swap-core/blob/master/contracts/PancakeFactory.sol
 6. Solidity documentation: `receive()` handles empty-calldata transfers; `send()` and `transfer()` forward only the 2,300-gas stipend. https://docs.solidity.org/en/latest/contracts.html
+7. BNB Smart Chain documentation, Introduction: 0.45-second average mainnet block interval. https://docs.bnbchain.org/bnb-smart-chain/introduction/
