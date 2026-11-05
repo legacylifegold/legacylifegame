@@ -306,7 +306,7 @@ contract LLGAMETest is Test {
         token.transfer(carol, 1_000 * U);
         assertEq(staking.referrerOf(carol), bob);
 
-        // level 1 bob: cap 30k ≥ 1k, liquid > 0, stake > 0 → paid 100; level 2 alice: cap ≥ 2k → paid 50
+        // level 1 bob: liquid ≥ 1 LLGAME and stake ≥ 1 LLGAME → paid 100; level 2 alice: liquid ≥ 2 LLGAME, stake ≥ 2 LLGAME → paid 50
         uint256 a0 = token.balanceOf(alice);
         uint256 b0 = token.balanceOf(bob);
         _stake(carol, 1_000 * U, 180, carol);
@@ -322,6 +322,37 @@ contract LLGAMETest is Test {
         a0 = token.balanceOf(alice);
         _stake(carol, 1_000 * U, 180, carol);
         assertEq(token.balanceOf(alice), a0, "walk stopped at bob");
+        _assertSolvent();
+    }
+
+    function test_ineligibleUplineBreaksTheChain() public {
+        _launch(10 ether);
+        _buy(alice, 1 ether);
+        // alice → bob → carol referral chain
+        _stake(alice, 10_000 * U, 180, alice);
+        vm.prank(alice);
+        token.transfer(bob, 10_000 * U);
+        assertEq(staking.referrerOf(bob), alice);
+        _stake(bob, 1_000 * U, 180, bob);
+        vm.prank(bob);
+        token.transfer(carol, 5_000 * U);
+        assertEq(staking.referrerOf(carol), bob);
+
+        // bob moves all liquid away → level 1 ineligible on balanceOf check
+        uint256 bobLiquid = token.balanceOf(bob);
+        vm.prank(bob);
+        token.transfer(dave, bobLiquid);
+        assertEq(token.balanceOf(bob), 0);
+        assertGt(staking.activeStakeOf(bob), 1, "bob's stake principal still held");
+
+        // carol stakes 1000: bob ineligible → walk stops, alice unpaid
+        uint256 a0 = token.balanceOf(alice);
+        _stake(carol, 1_000 * U, 180, carol);
+        assertEq(token.balanceOf(alice), a0, "alice not paid beyond the break");
+        // the full 200 budget → AIRDROP
+        LLGAMEStaking.StakeInfo memory r = staking.stakeInfo(staking.nextStakeId() - 1);
+        assertEq(r.staker, airdrop);
+        assertEq(r.principal, 200 * U);
         _assertSolvent();
     }
 

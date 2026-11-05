@@ -3,6 +3,7 @@ pragma solidity 0.8.28;
 
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {IERC20Permit} from "@openzeppelin/contracts/token/ERC20/extensions/IERC20Permit.sol";
+import {IERC20Metadata} from "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
 import {SafeCast} from "@openzeppelin/contracts/utils/math/SafeCast.sol";
 
 /// @title LLGAME locked staking and referral contract
@@ -31,6 +32,7 @@ contract LLGAMEStaking {
     address public immutable AIRDROP;
     address private immutable PAIR;
     address private immutable DEPLOYMENT;
+    uint256 private immutable UNIT; // 10^decimals, computed once at deployment
 
     uint256 public reserve;                         // the unallocated stake reserve
     uint256 public nextStakeId;
@@ -57,6 +59,7 @@ contract LLGAMEStaking {
         AIRDROP = airdrop_;
         PAIR = pair_;
         DEPLOYMENT = msg.sender;
+        UNIT = 10 ** IERC20Metadata(address(token_)).decimals();
         reserve = token_.balanceOf(address(this));
     }
 
@@ -279,20 +282,20 @@ contract LLGAMEStaking {
         }
     }
 
-    /// @dev Pays eligible uplines; stops at a root, at a zero share or at the first ineligible upline.
+    /// @dev Pays the upline chain contiguously: stops at a root, at a zero share or at the first
+    ///      ineligible upline. An ineligible upline breaks the chain for every level above it, even
+    ///      when a farther upline would meet its own higher threshold.
     function _payReferrals(address staker, uint256 amount) private returns (uint256 paid) {
         address upline = _accounts[staker].referrer;
         uint256 share = amount / 10;
-        uint256 requiredCap = amount;
+        uint256 required = UNIT; // level n needs balanceOf and activeStakeOf each >= (1 << (n - 1)) LLGAME, separately
         while (upline != address(0) && share != 0) {
-            uint256 liquid = TOKEN.balanceOf(upline);
-            uint256 staked = activeStakeOf[upline];
-            if (liquid == 0 || staked == 0 || liquid + staked < requiredCap) break;
+            if (TOKEN.balanceOf(upline) < required || activeStakeOf[upline] < required) break;
             paid += share;
             TOKEN.transfer(upline, share);
             upline = _accounts[upline].referrer;
             share >>= 1;
-            requiredCap <<= 1;
+            required <<= 1;
         }
     }
 }
