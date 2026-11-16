@@ -28,23 +28,22 @@ interface IWBNB {
 
 /// @title LLGAME deployment contract
 /// @notice Launches the ecosystem on its first funding round and closes when funding reaches at least
-///         POOL_BNB. Every round adds its BNB to the pool with LLGAME in proportion to it, at the fixed
-///         launch ratio POOL_SUPPLY / POOL_BNB; the deployment contract holds the rest of POOL_SUPPLY
+///         POOL_BNB_SUPPLY. Every round adds its BNB to the pool with LLGAME in proportion to it, at the fixed
+///         launch ratio POOL_SUPPLY / POOL_BNB_SUPPLY; the deployment contract holds the rest of POOL_SUPPLY
 ///         until close. Its only privileged call is PUBLISHER's abort.
 contract LLGAMEDeployment {
     enum State { NotLaunched, Funding, Closed, Aborted }
 
     address public constant DEAD = 0x000000000000000000000000000000000000dEaD;
-    uint256 private constant POOL_SUPPLY = 1_000_000e9;
-    uint256 private constant AUTHORS_SUPPLY = 250_000e9;
-    uint32 private constant AUTHORS_TERM = 1080;
+    uint256 private constant POOL_SUPPLY = 10_000e9;
+    uint256 private constant AUTHORS_SUPPLY = 500_000e9;
 
     /// @dev PancakeSwap v2 factory and WBNB on BNB Smart Chain mainnet.
     IPancakeFactory public constant FACTORY = IPancakeFactory(0xcA143Ce32Fe78f1f7019d7d551a6402fC5350c73);
     IWBNB public constant WBNB = IWBNB(0xbb4CdB9CBd36B01bD1cBaEBF2De08d9173bc095c);
     address public immutable AUTHORS;
     address public immutable AIRDROP;
-    uint256 public immutable POOL_BNB;
+    uint256 public immutable POOL_BNB_SUPPLY;
     address public immutable PUBLISHER;
 
     State public state;
@@ -52,7 +51,7 @@ contract LLGAMEDeployment {
     LLGAMEStaking public staking;
     IPancakePair public pair;
     uint256 public funded;          // BNB of all rounds
-    uint256 public poolSupplied;    // LLGAME added to the pool, min(POOL_SUPPLY, POOL_SUPPLY × funded / POOL_BNB)
+    uint256 public poolSupplied;    // LLGAME added to the pool, min(POOL_SUPPLY, POOL_SUPPLY × funded / POOL_BNB_SUPPLY)
     uint256 public withdrawn;       // BNB recovered by an abort
     mapping(address => uint256) public depositOf;
 
@@ -67,14 +66,14 @@ contract LLGAMEDeployment {
     /// @dev Non-payable; the sender becomes PUBLISHER. AUTHORS and AIRDROP must be distinct accounts and
     ///      neither may be a fixed address known at publication: zero, DEAD, FACTORY or WBNB. The token,
     ///      pair and staking contract do not exist before activation and are not checked.
-    constructor(address authors_, address airdrop_, uint256 poolBnb_) {
+    constructor(address authors_, address airdrop_, uint256 poolBnbSupply_) {
         if (
-            _isFixed(authors_) || _isFixed(airdrop_) || authors_ == airdrop_ || poolBnb_ == 0
-                || poolBnb_ > type(uint112).max
+            _isFixed(authors_) || _isFixed(airdrop_) || authors_ == airdrop_ || poolBnbSupply_ == 0
+                || poolBnbSupply_ > type(uint112).max
         ) revert InvalidParameter();
         AUTHORS = authors_;
         AIRDROP = airdrop_;
-        POOL_BNB = poolBnb_;
+        POOL_BNB_SUPPLY = poolBnbSupply_;
         PUBLISHER = msg.sender;
     }
 
@@ -91,7 +90,7 @@ contract LLGAMEDeployment {
         depositOf[msg.sender] += msg.value;
         _addLiquidity();
 
-        if (funded >= POOL_BNB) {
+        if (funded >= POOL_BNB_SUPPLY) {
             if (token.balanceOf(address(this)) != 0) revert LaunchCheckFailed();
             pair.transfer(DEAD, pair.balanceOf(address(this)));
             state = State.Closed;
@@ -133,7 +132,7 @@ contract LLGAMEDeployment {
         // CREATE addresses of this contract: nonce 1 for the token, nonce 2 for the staking contract.
         address predictedStaking = _createAddress(2);
 
-        LLGAME t = new LLGAME(predictedStaking);
+        LLGAME t = new LLGAME();
         uint256 total = t.TOTAL_SUPPLY();
         t.transfer(predictedStaking, total - POOL_SUPPLY - AUTHORS_SUPPLY);
 
@@ -147,7 +146,7 @@ contract LLGAMEDeployment {
         IPancakePair(p).skim(DEAD);
 
         t.approve(address(s), AUTHORS_SUPPLY);
-        s.stake(AUTHORS_SUPPLY, AUTHORS_TERM, AUTHORS);
+        s.stake(AUTHORS_SUPPLY, AUTHORS);
 
         if (
             t.totalSupply() != total || t.balanceOf(address(this)) != POOL_SUPPLY || t.balanceOf(p) != 0
@@ -161,12 +160,12 @@ contract LLGAMEDeployment {
     }
 
     /// @dev Adds the round's BNB and the LLGAME that brings the pool's share of POOL_SUPPLY to
-    ///      min(POOL_SUPPLY, POOL_SUPPLY × funded / POOL_BNB), minting LP tokens to this contract.
+    ///      min(POOL_SUPPLY, POOL_SUPPLY × funded / POOL_BNB_SUPPLY), minting LP tokens to this contract.
     ///      Computed from the cumulative total, so rounding never drifts and the round reaching
-    ///      POOL_BNB adds the whole held rest. A round minting no LP tokens reverts in the pair.
+    ///      POOL_BNB_SUPPLY adds the whole held rest. A round minting no LP tokens reverts in the pair.
     function _addLiquidity() private {
         IPancakePair p = pair;
-        uint256 target = funded >= POOL_BNB ? POOL_SUPPLY : POOL_SUPPLY * funded / POOL_BNB;
+        uint256 target = funded >= POOL_BNB_SUPPLY ? POOL_SUPPLY : POOL_SUPPLY * funded / POOL_BNB_SUPPLY;
         uint256 amount = target - poolSupplied;
         poolSupplied = target;
 

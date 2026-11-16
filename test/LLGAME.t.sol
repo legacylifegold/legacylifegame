@@ -43,7 +43,7 @@ interface IPair {
 contract LLGAMETest is Test {
     uint256 constant U = 1e9; // one LLGAME
     uint256 constant TOTAL = 340_000_000_000_000_000_000_000_000_000 * U;
-    uint256 constant POOL_BNB = 10 ether;
+    uint256 constant POOL_BNB_SUPPLY = 10 ether;
     address constant DEAD = 0x000000000000000000000000000000000000dEaD;
     address constant BSC_FACTORY = 0xcA143Ce32Fe78f1f7019d7d551a6402fC5350c73;
     address constant BSC_WBNB = 0xbb4CdB9CBd36B01bD1cBaEBF2De08d9173bc095c;
@@ -71,7 +71,7 @@ contract LLGAMETest is Test {
         deployCodeTo("PancakeFactory.sol:PancakeFactory", abi.encode(address(this)), BSC_FACTORY);
         factory = IFactory(BSC_FACTORY);
         vm.prank(publisher);
-        dep = new LLGAMEDeployment(authors, airdrop, POOL_BNB);
+        dep = new LLGAMEDeployment(authors, airdrop, POOL_BNB_SUPPLY);
         assertEq(address(dep.FACTORY()), BSC_FACTORY);
         assertEq(address(dep.WBNB()), BSC_WBNB);
     }
@@ -103,11 +103,16 @@ contract LLGAMETest is Test {
         pair.swap(wbnbIs0 ? 0 : out, wbnbIs0 ? out : 0, user, "");
     }
 
-    function _stake(address payer, uint256 amount, uint32 term, address beneficiary) internal returns (uint256 id) {
+    function _stake(address payer, uint256 amount, address beneficiary) internal returns (uint256 id) {
         vm.startPrank(payer);
         token.approve(address(staking), amount);
-        id = staking.stake(amount, term, beneficiary);
+        id = staking.stake(amount, beneficiary);
         vm.stopPrank();
+    }
+
+    /// @dev Gives `who` LLGAME out of thin air: the pool holds only POOL_SUPPLY, too little for the staking scenarios.
+    function _give(address who, uint256 amount) internal {
+        deal(address(token), who, token.balanceOf(who) + amount, true);
     }
 
     function _assertSolvent() internal view {
@@ -127,27 +132,25 @@ contract LLGAMETest is Test {
         assertEq(uint8(dep.state()), uint8(LLGAMEDeployment.State.Funding));
         assertEq(token.decimals(), 9);
         assertEq(token.totalSupply(), TOTAL);
-        assertEq(token.STAKING(), address(staking));
         // 0.1 of 10 BNB: the pool gets 1% of POOL_SUPPLY, the rest is held until close
-        assertEq(token.balanceOf(address(pair)), 10_000 * U);
-        assertEq(token.balanceOf(address(dep)), 990_000 * U);
-        assertEq(dep.poolSupplied(), 10_000 * U);
-        assertEq(token.balanceOf(address(staking)), TOTAL - 1_000_000 * U);
+        assertEq(token.balanceOf(address(pair)), 100 * U);
+        assertEq(token.balanceOf(address(dep)), 9_900 * U);
+        assertEq(dep.poolSupplied(), 100 * U);
+        assertEq(token.balanceOf(address(staking)), TOTAL - 10_000 * U);
         assertGt(pair.balanceOf(address(dep)), 0);
         assertEq(wbnb.balanceOf(address(pair)), 0.1 ether);
 
         // creators' stake and its AIRDROP remainder stake
         LLGAMEStaking.StakeInfo memory a = staking.stakeInfo(0);
         assertEq(a.staker, authors);
-        assertEq(a.principal, 250_000 * U);
-        assertEq(a.reward, 720_000 * U);
-        assertEq(a.term, 1080);
+        assertEq(a.principal, 500_000 * U);
+        assertEq(a.reward, 1_440_000 * U);
         LLGAMEStaking.StakeInfo memory d = staking.stakeInfo(1);
         assertEq(d.staker, airdrop);
-        assertEq(d.principal, 50_000 * U);
-        assertEq(d.reward, 144_000 * U);
-        assertEq(staking.activeStakeOf(airdrop), 50_000 * U);
-        assertEq(staking.reserve(), TOTAL - 2_164_000 * U, "R_launch");
+        assertEq(d.principal, 100_000 * U);
+        assertEq(d.reward, 288_000 * U);
+        assertEq(staking.activeStakeOf(airdrop), 100_000 * U);
+        assertEq(staking.reserve(), TOTAL - 2_338_000 * U, "R_launch");
         assertTrue(staking.seen(authors));
         assertEq(staking.referrerOf(authors), address(0));
         _assertSolvent();
@@ -173,22 +176,22 @@ contract LLGAMETest is Test {
 
     function test_roundsAndClose() public {
         _launch(1 ether);
-        assertEq(_poolLlgame(), 100_000 * U);
+        assertEq(_poolLlgame(), 1_000 * U);
         uint256 lp1 = pair.balanceOf(address(dep));
         _fund(alice, 4 ether);
-        assertEq(_poolLlgame(), 500_000 * U, "LLGAME in proportion to BNB");
-        assertEq(token.balanceOf(address(dep)), 500_000 * U, "rest held until close");
+        assertEq(_poolLlgame(), 5_000 * U, "LLGAME in proportion to BNB");
+        assertEq(token.balanceOf(address(dep)), 5_000 * U, "rest held until close");
         assertApproxEqRel(pair.balanceOf(address(dep)), lp1 * 5, 1e12, "LP grows with the pool");
         _fund(bob, 3 ether);
-        assertEq(_poolLlgame(), 800_000 * U);
+        assertEq(_poolLlgame(), 8_000 * U);
         assertEq(uint8(dep.state()), uint8(LLGAMEDeployment.State.Funding));
-        _fund(carol, 5 ether); // overshoots POOL_BNB: all of it enters the pool with the held rest
+        _fund(carol, 5 ether); // overshoots POOL_BNB_SUPPLY: all of it enters the pool with the held rest
         assertEq(uint8(dep.state()), uint8(LLGAMEDeployment.State.Closed));
         assertEq(dep.funded(), 13 ether);
         assertEq(wbnb.balanceOf(address(pair)), 13 ether);
-        assertEq(_poolLlgame(), 1_000_000 * U);
+        assertEq(_poolLlgame(), 10_000 * U);
         assertEq(token.balanceOf(address(dep)), 0);
-        assertEq(dep.poolSupplied(), 1_000_000 * U);
+        assertEq(dep.poolSupplied(), 10_000 * U);
         assertGt(pair.balanceOf(DEAD), 0);
         assertEq(pair.balanceOf(address(dep)), 0);
 
@@ -205,12 +208,12 @@ contract LLGAMETest is Test {
         address[4] memory fixedAddrs = [address(0), DEAD, BSC_FACTORY, BSC_WBNB];
         for (uint256 i; i < fixedAddrs.length; i++) {
             vm.expectRevert(LLGAMEDeployment.InvalidParameter.selector);
-            new LLGAMEDeployment(fixedAddrs[i], airdrop, POOL_BNB);
+            new LLGAMEDeployment(fixedAddrs[i], airdrop, POOL_BNB_SUPPLY);
             vm.expectRevert(LLGAMEDeployment.InvalidParameter.selector);
-            new LLGAMEDeployment(authors, fixedAddrs[i], POOL_BNB);
+            new LLGAMEDeployment(authors, fixedAddrs[i], POOL_BNB_SUPPLY);
         }
         vm.expectRevert(LLGAMEDeployment.InvalidParameter.selector);
-        new LLGAMEDeployment(authors, authors, POOL_BNB);
+        new LLGAMEDeployment(authors, authors, POOL_BNB_SUPPLY);
         vm.expectRevert(LLGAMEDeployment.InvalidParameter.selector);
         new LLGAMEDeployment(authors, airdrop, 0);
         vm.expectRevert(LLGAMEDeployment.InvalidParameter.selector);
@@ -218,7 +221,7 @@ contract LLGAMETest is Test {
     }
 
     function test_launchAndCloseInOneRound() public {
-        _launch(POOL_BNB);
+        _launch(POOL_BNB_SUPPLY);
         assertEq(uint8(dep.state()), uint8(LLGAMEDeployment.State.Closed));
         assertGt(pair.balanceOf(DEAD), 0);
     }
@@ -235,8 +238,8 @@ contract LLGAMETest is Test {
         vm.prank(publisher);
         dep.abort();
         assertEq(uint8(dep.state()), uint8(LLGAMEDeployment.State.Aborted));
-        // the held 600,000 LLGAME and the pool's LLGAME are burned
-        assertLt(token.totalSupply(), supplyBefore - 600_000 * U, "pool and held LLGAME burned");
+        // the held 6,000 LLGAME and the pool's LLGAME are burned
+        assertLt(token.totalSupply(), supplyBefore - 6_000 * U, "pool and held LLGAME burned");
         assertEq(token.balanceOf(address(dep)), 0);
 
         uint256 w = dep.withdrawn();
@@ -262,80 +265,90 @@ contract LLGAMETest is Test {
 
     function test_referralBindingAndPayout() public {
         _launch(10 ether);
-        _buy(alice, 1 ether);
-        assertTrue(staking.seen(alice));
-        assertEq(staking.referrerOf(alice), address(0), "pair is excluded");
+        _give(alice, 100_000 * U);
+        assertFalse(staking.seen(alice), "a purchase marks nothing");
+        assertEq(staking.referrerOf(alice), address(0));
 
         uint256 aBal = token.balanceOf(alice);
-        _stake(alice, aBal / 2, 180, alice);
+        _stake(alice, aBal / 2, alice);
+        assertTrue(staking.seen(alice));
+        assertEq(staking.referrerOf(alice), address(0), "self-staked: a root");
 
-        // alice (a staker) sends bob his first LLGAME: bob is bound to alice
+        // alice (a staker) sends bob LLGAME: no binding; her stake for him binds him to her
         vm.prank(alice);
         token.transfer(bob, 1_000 * U);
+        assertFalse(staking.seen(bob));
+        _stake(alice, 500 * U, bob);
         assertEq(staking.referrerOf(bob), alice);
 
         // bob stakes 1000: alice is eligible at level 1 and gets 10%
         uint256 aliceBefore = token.balanceOf(alice);
         uint256 nextId = staking.nextStakeId();
-        _stake(bob, 1_000 * U, 360, bob);
+        _stake(bob, 1_000 * U, bob);
         assertEq(token.balanceOf(alice) - aliceBefore, 100 * U);
         LLGAMEStaking.StakeInfo memory r = staking.stakeInfo(nextId + 1);
         assertEq(r.staker, airdrop);
         assertEq(r.principal, 100 * U); // 200 budget − 100 paid
-        assertEq(r.reward, 72 * U);     // ordinary 360-day reward on the remainder
-        assertEq(r.term, 360);
+        assertEq(r.reward, 288 * U);    // ordinary reward on the remainder
 
-        // carol's first LLGAME comes from alice, a staker; dave's from carol, who has no stake
+        // a transfer binds nothing; a stake opened by a payer without a stake leaves the beneficiary a root
         vm.prank(alice);
         token.transfer(carol, 2_000 * U);
-        assertEq(staking.referrerOf(carol), alice);
-        vm.prank(carol);
-        token.transfer(dave, 500 * U);
+        assertFalse(staking.seen(carol));
+        _stake(carol, 500 * U, dave);
+        assertTrue(staking.seen(dave));
         assertEq(staking.referrerOf(dave), address(0), "carol has no stake yet");
+        assertEq(staking.referrerOf(carol), address(0));
         _assertSolvent();
     }
 
     function test_payoutNeedsLiquidAndStakeAtEveryLevel() public {
         _launch(10 ether);
-        _buy(alice, 1 ether);
-        _stake(alice, 10_000 * U, 180, alice);
+        _give(alice, 100_000 * U);
+        _stake(alice, 10_000 * U, alice);
         vm.prank(alice);
         token.transfer(bob, 30_000 * U);
-        _stake(bob, 10_000 * U, 180, bob);
+        _stake(alice, 1_000 * U, bob); // binds bob to alice
+        assertEq(staking.referrerOf(bob), alice);
+        _stake(bob, 10_000 * U, bob);
         vm.prank(bob);
         token.transfer(carol, 1_000 * U);
+        _stake(bob, 1_000 * U, carol); // binds carol to bob
         assertEq(staking.referrerOf(carol), bob);
 
         // level 1 bob: liquid ≥ 1 LLGAME and stake ≥ 1 LLGAME → paid 100; level 2 alice: liquid ≥ 2 LLGAME, stake ≥ 2 LLGAME → paid 50
         uint256 a0 = token.balanceOf(alice);
         uint256 b0 = token.balanceOf(bob);
-        _stake(carol, 1_000 * U, 180, carol);
+        _stake(carol, 1_000 * U, carol);
         assertEq(token.balanceOf(bob) - b0, 100 * U);
         assertEq(token.balanceOf(alice) - a0, 50 * U);
 
-        // bob moves all liquid LLGAME away → ineligible at level 1, the walk stops before alice
+        // bob moves all liquid LLGAME away → ineligible at level 1 and passed over, alice is still paid at level 2
         uint256 bobLiquid = token.balanceOf(bob);
         vm.prank(bob);
         token.transfer(dave, bobLiquid);
         vm.prank(alice);
         token.transfer(carol, 1_000 * U);
         a0 = token.balanceOf(alice);
-        _stake(carol, 1_000 * U, 180, carol);
-        assertEq(token.balanceOf(alice), a0, "walk stopped at bob");
+        _stake(carol, 1_000 * U, carol);
+        assertEq(token.balanceOf(alice) - a0, 50 * U, "bob passed over, alice paid at level 2");
         _assertSolvent();
     }
 
-    function test_ineligibleUplineBreaksTheChain() public {
+    // LEGACY-LIFE-GAME-BSC-REFERRAL-WALK
+    function test_ineligibleUplineIsPassedOver() public {
         _launch(10 ether);
-        _buy(alice, 1 ether);
+        _give(alice, 100_000 * U);
         // alice → bob → carol referral chain
-        _stake(alice, 10_000 * U, 180, alice);
+        _stake(alice, 10_000 * U, alice);
         vm.prank(alice);
         token.transfer(bob, 10_000 * U);
+        _stake(alice, 1_000 * U, bob); // binds bob to alice
         assertEq(staking.referrerOf(bob), alice);
-        _stake(bob, 1_000 * U, 180, bob);
+        _stake(bob, 1_000 * U, bob);
         vm.prank(bob);
         token.transfer(carol, 5_000 * U);
+        _stake(bob, 1_000 * U, carol); // binds carol to bob
         assertEq(staking.referrerOf(carol), bob);
 
         // bob moves all liquid away → level 1 ineligible on balanceOf check
@@ -345,49 +358,305 @@ contract LLGAMETest is Test {
         assertEq(token.balanceOf(bob), 0);
         assertGt(staking.activeStakeOf(bob), 1, "bob's stake principal still held");
 
-        // carol stakes 1000: bob ineligible → walk stops, alice unpaid
+        // carol stakes 1000: bob ineligible and unpaid, alice paid her level 2 share
         uint256 a0 = token.balanceOf(alice);
-        _stake(carol, 1_000 * U, 180, carol);
-        assertEq(token.balanceOf(alice), a0, "alice not paid beyond the break");
-        // the full 200 budget → AIRDROP
+        _stake(carol, 1_000 * U, carol);
+        assertEq(token.balanceOf(bob), 0, "bob passed over");
+        assertEq(token.balanceOf(alice) - a0, 50 * U, "alice paid beyond the ineligible level");
+        // 200 budget − 50 paid → AIRDROP
         LLGAMEStaking.StakeInfo memory r = staking.stakeInfo(staking.nextStakeId() - 1);
         assertEq(r.staker, airdrop);
-        assertEq(r.principal, 200 * U);
+        assertEq(r.principal, 150 * U);
+        _assertSolvent();
+    }
+
+    // LEGACY-LIFE-GAME-BSC-REFERRAL-WALK
+    function test_walkEndsWhereShareIsNotWorthLevelGas() public {
+        _launch(10 ether);
+        _give(alice, 100_000 * U);
+        // alice → bob → carol referral chain, both uplines eligible
+        _stake(alice, 10_000 * U, alice);
+        vm.prank(alice);
+        token.transfer(bob, 10_000 * U);
+        _stake(alice, 1_000 * U, bob);
+        _stake(bob, 1_000 * U, bob);
+        vm.prank(bob);
+        token.transfer(carol, 5_000 * U);
+        _stake(bob, 1_000 * U, carol);
+        assertEq(staking.referrerOf(carol), bob);
+
+        // pool of 10,000 LLGAME and 10 BNB held for a whole price window: at the 5 gwei cap a gas unit is worth
+        // 0.000005 LLGAME, a level about 0.07 LLGAME. Both levels are paid their share less the gas charge,
+        // which goes to carol, the caller.
+        skip(31 minutes);
+        uint256 a0 = token.balanceOf(alice);
+        uint256 b0 = token.balanceOf(bob);
+        uint256 c0 = token.balanceOf(carol);
+        vm.txGasPrice(5 gwei);
+        _stake(carol, 1_000 * U, carol);
+        uint256 bobPaid = token.balanceOf(bob) - b0;
+        uint256 alicePaid = token.balanceOf(alice) - a0;
+        uint256 refund = token.balanceOf(carol) + 1_000 * U - c0;
+        assertGt(refund, 0, "caller refunded");
+        assertLt(bobPaid, 100 * U, "level 1 charged its gas");
+        assertGt(bobPaid, 99 * U);
+        assertLt(alicePaid, 50 * U, "level 2 charged its gas");
+        assertGt(alicePaid, 49 * U);
+        assertEq(bobPaid + alicePaid + refund, 150 * U, "the charges are what the caller is refunded");
+        LLGAMEStaking.StakeInfo memory r = staking.stakeInfo(staking.nextStakeId() - 1);
+        assertEq(r.staker, airdrop);
+        assertEq(r.principal, 50 * U, "200 budget less both shares");
+
+        // a gas price a billion times higher is valued at the cap: the charges stay of the same order
+        b0 = token.balanceOf(bob);
+        c0 = token.balanceOf(carol);
+        vm.txGasPrice(1_000_000_000 gwei);
+        _stake(carol, 1_000 * U, carol);
+        vm.txGasPrice(0);
+        assertGt(token.balanceOf(bob) - b0, 99 * U, "gas price capped");
+        assertLt(token.balanceOf(carol) + 1_000 * U - c0, 1 * U, "refund at the capped gas price");
+        _assertSolvent();
+    }
+
+    // LEGACY-LIFE-GAME-BSC-REFERRAL-WALK
+    function test_gasOfPassedLevelRefundedFromItsShare() public {
+        _launch(10 ether);
+        _give(alice, 100_000 * U);
+        _stake(alice, 10_000 * U, alice);
+        vm.prank(alice);
+        token.transfer(bob, 10_000 * U);
+        _stake(alice, 1_000 * U, bob);
+        _stake(bob, 1_000 * U, bob);
+        vm.prank(bob);
+        token.transfer(carol, 5_000 * U);
+        _stake(bob, 1_000 * U, carol);
+        uint256 bobLiquid = token.balanceOf(bob);
+        vm.prank(bob);
+        token.transfer(dave, bobLiquid); // bob ineligible at level 1
+
+        uint256 a0 = token.balanceOf(alice);
+        uint256 c0 = token.balanceOf(carol);
+        skip(31 minutes);
+        vm.txGasPrice(5 gwei);
+        _stake(carol, 1_000 * U, carol);
+        vm.txGasPrice(0);
+        uint256 alicePaid = token.balanceOf(alice) - a0;
+        uint256 refund = token.balanceOf(carol) + 1_000 * U - c0;
+        assertEq(token.balanceOf(bob), 0, "bob passed over");
+        assertLt(alicePaid, 50 * U);
+        assertGt(alicePaid, 40 * U);
+        assertGt(alicePaid + refund, 50 * U, "the passed level's gas is refunded too, from its own share");
+        assertEq(staking.stakeInfo(staking.nextStakeId() - 1).principal, 200 * U - alicePaid - refund);
+        _assertSolvent();
+    }
+
+    // LEGACY-LIFE-GAME-BSC-REFERRAL-WALK
+    function test_deepWalkEndsBeforeShareBelowItsGas() public {
+        _launch(10 ether);
+        address s = _chain(8, "deep-");
+        address top = makeAddr("deep-0");
+        address direct = makeAddr("deep-7");
+        uint256 t0 = token.balanceOf(top);
+        uint256 d0 = token.balanceOf(direct);
+        uint256 s0 = token.balanceOf(s);
+        // a stake of 10 LLGAME: shares halve from 1 to 0.0078 LLGAME; at the 5 gwei cap a level's gas is worth
+        // some hundredths of an LLGAME, so it outweighs the top share and the walk ends below it. The refund
+        // stays within a tenth of the 2 LLGAME budget.
+        skip(31 minutes);
+        vm.txGasPrice(5 gwei);
+        _stake(s, 10 * U, s);
+        vm.txGasPrice(0);
+        uint256 refund = token.balanceOf(s) + 10 * U - s0;
+        emit log_named_uint("refund, base units", refund);
+        assertEq(token.balanceOf(top), t0, "walk ended before the top level");
+        assertGt(token.balanceOf(direct), d0);
+        assertLt(token.balanceOf(direct) - d0, 1 * U);
+        assertGt(refund, 0, "caller refunded");
+        assertLe(refund, 2 * U / 10, "refund within a tenth of the budget");
+        _assertSolvent();
+    }
+
+    /// @dev A chain of `depth` eligible uplines above a fresh staker, each upline holding 10,000 LLGAME liquid
+    ///      and 1,000 LLGAME staked; returns the staker, bound to the lowest upline.
+    function _chain(uint256 depth, string memory tag) internal returns (address staker) {
+        address upper = makeAddr(string.concat(tag, "0"));
+        _give(upper, 12_000 * U);
+        _stake(upper, 1_000 * U, upper);
+        for (uint256 i = 1; i <= depth; i++) {
+            address lower = makeAddr(string.concat(tag, vm.toString(i)));
+            _give(upper, 1_000 * U);
+            _stake(upper, 1_000 * U, lower); // binds lower to upper
+            _give(lower, 12_000 * U);
+            upper = lower;
+        }
+        staker = upper;
+    }
+
+    /// @dev Gas of a stake whose walk pays `depth` levels, the staker already seen and bound.
+    function _walkGas(uint256 depth) internal returns (uint256) {
+        address s = _chain(depth, string.concat("lvl", vm.toString(depth), "-"));
+        vm.startPrank(s);
+        token.approve(address(staking), 1_000_000 * U);
+        _give(s, 1_000_000 * U);
+        staking.stake(1_000_000 * U, s);
+        vm.stopPrank();
+        return vm.lastCallGas().gasTotalUsed;
+    }
+
+    /// @dev Reports the gas of one paid level, measured as the difference of stakes walking 1 to 8 levels. Run
+    ///      with `--isolate -vv` for on-chain figures: every call is then a transaction of its own and the slots
+    ///      of a level are cold, as they are on chain. The contract measures the gas itself, with gasleft().
+    function test_levelGasMeasured() public {
+        _launch(10 ether);
+        uint256 prev = _walkGas(1);
+        uint256 maxLevel;
+        for (uint256 d = 2; d <= 8; d++) {
+            uint256 g = _walkGas(d);
+            emit log_named_uint(string.concat("gas of level ", vm.toString(d)), g - prev);
+            if (g - prev > maxLevel) maxLevel = g - prev;
+            prev = g;
+        }
+        emit log_named_uint("max gas of one paid level", maxLevel);
+        assertGt(maxLevel, 0);
+    }
+
+    // LEGACY-LIFE-GAME-BSC-REFERRAL-WALK
+    function test_rootStakerReadsNoReserves() public {
+        _launch(10 ether);
+        _give(alice, 100_000 * U);
+        uint256 nextId = staking.nextStakeId();
+        vm.expectCall(address(pair), abi.encodeWithSelector(IPair.getReserves.selector), 0);
+        vm.txGasPrice(1_000_000 gwei);
+        _stake(alice, 1_000 * U, alice);
+        vm.txGasPrice(0);
+        assertEq(staking.referrerOf(alice), address(0));
+        assertEq(staking.stakeInfo(nextId + 1).principal, 200 * U, "the whole budget to AIRDROP");
+    }
+
+    // LEGACY-LIFE-GAME-BSC-REFERRAL-WALK
+    function test_currentPriceBeforeReferenceStored() public {
+        _launch(10 ether);
+        _give(alice, 100_000 * U);
+        _stake(alice, 10_000 * U, alice);
+        vm.prank(alice);
+        token.transfer(bob, 10_000 * U);
+        _stake(alice, 1_000 * U, bob);
+        _stake(bob, 1_000 * U, bob);
+        vm.prank(bob);
+        token.transfer(carol, 5_000 * U);
+        _stake(bob, 1_000 * U, carol);
+
+        // the pair's reserves were set in this block, so no reference price is stored yet: the gas is valued at
+        // the current reserves, 10,000 LLGAME per 10 BNB, both levels are charged and the caller refunded
+        uint256 a0 = token.balanceOf(alice);
+        uint256 b0 = token.balanceOf(bob);
+        uint256 c0 = token.balanceOf(carol);
+        vm.txGasPrice(5 gwei);
+        _stake(carol, 1_000 * U, carol);
+        vm.txGasPrice(0);
+        uint256 bobPaid = token.balanceOf(bob) - b0;
+        uint256 alicePaid = token.balanceOf(alice) - a0;
+        uint256 refund = token.balanceOf(carol) + 1_000 * U - c0;
+        assertGt(refund, 0, "caller refunded at the current price");
+        assertLt(bobPaid, 100 * U, "level 1 charged its gas");
+        assertGt(bobPaid, 99 * U);
+        assertLt(alicePaid, 50 * U, "level 2 charged its gas");
+        assertGt(alicePaid, 49 * U);
+        assertEq(bobPaid + alicePaid + refund, 150 * U, "the charges are what the caller is refunded");
+        _assertSolvent();
+    }
+
+    // LEGACY-LIFE-GAME-BSC-REFERRAL-WALK
+    function test_droppedPriceValuedAtReference() public {
+        _launch(10 ether);
+        _give(alice, 100_000 * U);
+        _stake(alice, 10_000 * U, alice);
+        vm.prank(alice);
+        token.transfer(bob, 10_000 * U);
+        _stake(alice, 1_000 * U, bob);
+        _stake(bob, 1_000 * U, bob);
+        vm.prank(bob);
+        token.transfer(carol, 5_000 * U);
+        _stake(bob, 1_000 * U, carol);
+
+        // the pool's reserves stand since an earlier block: this walk stores the current price as the reference
+        skip(31 minutes);
+        vm.txGasPrice(5 gwei);
+        uint256 c0 = token.balanceOf(carol);
+        _stake(carol, 1_000 * U, carol);
+        uint256 steady = token.balanceOf(carol) + 1_000 * U - c0;
+        assertGt(steady, 0);
+
+        (uint112 r0, uint112 r1, uint32 t) = pair.getReserves();
+        bool wbnbIs0 = pair.token0() == address(wbnb);
+
+        // LLGAME ten times cheaper than its reference: the gas is valued at the reference, not ten times dearer
+        vm.mockCall(
+            address(pair),
+            abi.encodeWithSelector(IPair.getReserves.selector),
+            wbnbIs0 ? abi.encode(r0, r1 * 10, t) : abi.encode(r0 * 10, r1, t)
+        );
+        c0 = token.balanceOf(carol);
+        _stake(carol, 1_000 * U, carol);
+        uint256 dropped = token.balanceOf(carol) + 1_000 * U - c0;
+        assertGt(dropped, 0);
+        assertLt(dropped, 2 * steady, "a dropped price does not raise the refund");
+
+        // a period later the dropped price still stands: the reference follows it by one guard step only
+        skip(31 minutes);
+        c0 = token.balanceOf(carol);
+        _stake(carol, 1_000 * U, carol);
+        assertLt(token.balanceOf(carol) + 1_000 * U - c0, 2 * steady, "the reference follows a drop by steps");
+
+        // LLGAME ten times dearer: the current price is used and the refund shrinks
+        vm.mockCall(
+            address(pair),
+            abi.encodeWithSelector(IPair.getReserves.selector),
+            wbnbIs0 ? abi.encode(r0, r1 / 10, t) : abi.encode(r0 / 10, r1, t)
+        );
+        c0 = token.balanceOf(carol);
+        _stake(carol, 1_000 * U, carol);
+        uint256 raised = token.balanceOf(carol) + 1_000 * U - c0;
+        assertLt(raised, steady / 2, "a raised price lowers the refund");
+
+        vm.clearMockedCalls();
+        vm.txGasPrice(0);
         _assertSolvent();
     }
 
     function test_airdropNeverRefers() public {
         _launch(10 ether);
-        _buy(alice, 1 ether);
-        _stake(alice, 1_000 * U, 180, airdrop); // anyone may stake for AIRDROP
+        _give(alice, 100_000 * U);
+        _stake(alice, 1_000 * U, airdrop); // anyone may stake for AIRDROP
         assertGt(staking.activeStakeOf(airdrop), 0);
+        assertEq(staking.referrerOf(airdrop), address(0), "AIRDROP is never referred");
         vm.prank(alice);
         token.transfer(airdrop, 100 * U);
-        assertEq(staking.referrerOf(airdrop), address(0), "AIRDROP is never referred");
-        vm.prank(airdrop);
-        token.transfer(dave, 10 * U);
+        _stake(airdrop, 10 * U, dave);
         assertTrue(staking.seen(dave));
         assertEq(staking.referrerOf(dave), address(0), "AIRDROP is never a referrer");
     }
 
     function test_stakeForUnseenBeneficiaryBindsPayer() public {
         _launch(10 ether);
-        _buy(alice, 1 ether);
-        _stake(alice, 1_000 * U, 180, alice);
-        _stake(alice, 500 * U, 180, bob);
+        _give(alice, 100_000 * U);
+        _stake(alice, 1_000 * U, alice);
+        _stake(alice, 500 * U, bob);
         assertEq(staking.referrerOf(bob), alice);
         assertEq(staking.activeStakeOf(bob), 500 * U);
     }
 
     function test_excludedBeneficiaryRejected() public {
         _launch(10 ether);
-        _buy(alice, 1 ether);
+        _give(alice, 100_000 * U);
         vm.startPrank(alice);
         token.approve(address(staking), 1_000 * U);
         vm.expectRevert(LLGAMEStaking.InvalidBeneficiary.selector);
-        staking.stake(1_000 * U, 180, address(pair));
-        vm.expectRevert(LLGAMEStaking.InvalidTerm.selector);
-        staking.stake(1_000 * U, 181, alice);
+        staking.stake(1_000 * U, address(pair));
+        vm.expectRevert(LLGAMEStaking.InvalidBeneficiary.selector);
+        staking.stake(1_000 * U, address(0));
+        vm.expectRevert(LLGAMEStaking.InvalidAmount.selector);
+        staking.stake(72_000_000 - 1, alice);
         vm.stopPrank();
     }
 
@@ -395,24 +664,24 @@ contract LLGAMETest is Test {
 
     function test_claimWithdraw() public {
         _launch(10 ether);
-        _buy(alice, 1 ether);
-        uint256 id = _stake(alice, 1_000 * U, 180, alice);
-        vm.warp(block.timestamp + 90 days);
-        assertEq(staking.claimable(id), 150 * U);
+        _give(alice, 100_000 * U);
+        uint256 id = _stake(alice, 1_000 * U, alice);
+        vm.warp(block.timestamp + 540 days);
+        assertEq(staking.claimable(id), 1_440 * U);
         uint256 b0 = token.balanceOf(alice);
         vm.prank(alice);
         staking.claim(id);
-        assertEq(token.balanceOf(alice) - b0, 150 * U);
+        assertEq(token.balanceOf(alice) - b0, 1_440 * U);
 
         vm.prank(alice);
         vm.expectRevert(LLGAMEStaking.NotMatured.selector);
         staking.withdraw(id);
 
-        vm.warp(block.timestamp + 90 days);
+        vm.warp(block.timestamp + 540 days);
         b0 = token.balanceOf(alice);
         vm.prank(alice);
         staking.withdraw(id);
-        assertEq(token.balanceOf(alice) - b0, 1_150 * U, "principal and unclaimed reward");
+        assertEq(token.balanceOf(alice) - b0, 2_440 * U, "principal and unclaimed reward");
         assertEq(staking.activeStakeOf(alice), 0);
         assertEq(staking.claimable(id), 0);
         vm.prank(alice);
@@ -423,10 +692,10 @@ contract LLGAMETest is Test {
 
     function test_delegate() public {
         _launch(10 ether);
-        _buy(alice, 1 ether);
-        uint256 id = _stake(alice, 1_000 * U, 360, alice);
+        _give(alice, 100_000 * U);
+        uint256 id = _stake(alice, 1_000 * U, alice);
 
-        uint256 minAmount = 96_000_000;
+        uint256 minAmount = 72_000_000;
 
         // delegated amount below the minimum
         vm.prank(alice);
@@ -438,22 +707,21 @@ contract LLGAMETest is Test {
         vm.expectRevert(LLGAMEStaking.InvalidAmount.selector);
         staking.delegateStake(id, 1_000 * U - (minAmount - 1), bob);
 
-        vm.warp(block.timestamp + 180 days);
+        vm.warp(block.timestamp + 540 days);
 
         uint256 b0 = token.balanceOf(alice);
         vm.prank(alice);
         uint256 did = staking.delegateStake(id, 250 * U, bob);
-        assertEq(token.balanceOf(alice) - b0, 360 * U, "accrued reward paid before split");
+        assertEq(token.balanceOf(alice) - b0, 1_440 * U, "accrued reward paid before split");
         assertEq(staking.referrerOf(bob), alice);
 
         LLGAMEStaking.StakeInfo memory o = staking.stakeInfo(id);
         LLGAMEStaking.StakeInfo memory d = staking.stakeInfo(did);
         assertEq(o.principal, 750 * U);
         assertEq(d.principal, 250 * U);
-        assertEq(uint256(o.reward) + d.reward, 720 * U);
-        assertEq(uint256(o.claimed) + d.claimed, 360 * U);
+        assertEq(uint256(o.reward) + d.reward, 2_880 * U);
+        assertEq(uint256(o.claimed) + d.claimed, 1_440 * U);
         assertEq(d.start, o.start);
-        assertEq(d.term, o.term);
         assertEq(staking.claimable(did), 0);
         assertEq(staking.activeStakeOf(alice), 750 * U);
         assertEq(staking.activeStakeOf(bob), 250 * U);
@@ -470,22 +738,21 @@ contract LLGAMETest is Test {
         LLGAMEStaking.StakeInfo memory reassigned = staking.stakeInfo(id);
         assertEq(reassigned.staker, carol);
         assertEq(reassigned.principal, 750 * U);
-        assertEq(reassigned.reward, 540 * U);
-        assertEq(reassigned.claimed, 270 * U);
+        assertEq(reassigned.reward, 2_160 * U);
+        assertEq(reassigned.claimed, 1_080 * U);
         assertEq(reassigned.start, o.start);
-        assertEq(reassigned.term, o.term);
 
         assertEq(staking.referrerOf(carol), alice);
         assertEq(staking.activeStakeOf(alice), 0);
         assertEq(staking.activeStakeOf(bob), 250 * U);
         assertEq(staking.activeStakeOf(carol), 750 * U);
 
-        vm.warp(block.timestamp + 180 days);
+        vm.warp(block.timestamp + 540 days);
 
         b0 = token.balanceOf(carol);
         vm.prank(carol);
         staking.withdraw(did2);
-        assertEq(token.balanceOf(carol) - b0, 750 * U + 270 * U);
+        assertEq(token.balanceOf(carol) - b0, 750 * U + 1_080 * U);
 
         assertEq(staking.activeStakeOf(carol), 0);
         _assertSolvent();
@@ -494,7 +761,7 @@ contract LLGAMETest is Test {
     function test_stakeWithPermit() public {
         _launch(10 ether);
         (address owner, uint256 pk) = makeAddrAndKey("owner");
-        _buy(owner, 1 ether);
+        _give(owner, 100_000 * U);
         uint256 amount = 1_000 * U;
         uint256 deadline = block.timestamp + 1 hours;
         bytes32 structHash = keccak256(
@@ -506,19 +773,27 @@ contract LLGAMETest is Test {
         (uint8 v, bytes32 r, bytes32 s) =
             vm.sign(pk, keccak256(abi.encodePacked("\x19\x01", token.DOMAIN_SEPARATOR(), structHash)));
         vm.prank(owner);
-        staking.stakeWithPermit(amount, 180, owner, deadline, v, r, s);
+        staking.stakeWithPermit(amount, owner, deadline, v, r, s);
         assertEq(staking.activeStakeOf(owner), amount);
     }
 
-    function test_noteReceiptOnlyToken() public {
+    function test_transferBindsNothing() public {
         _launch(10 ether);
-        vm.expectRevert(LLGAMEStaking.NotToken.selector);
-        staking.noteReceipt(alice, bob);
+        _give(alice, 100_000 * U);
+        _stake(alice, 1_000 * U, alice);
+        vm.prank(alice);
+        token.transfer(bob, 100 * U);
+        assertFalse(staking.seen(bob));
+        assertEq(staking.referrerOf(bob), address(0));
+        // bob's own first stake makes him a root: a transfer is no binding path
+        _stake(bob, 50 * U, bob);
+        assertTrue(staking.seen(bob));
+        assertEq(staking.referrerOf(bob), address(0));
     }
 
     function test_donationNotCredited() public {
         _launch(10 ether);
-        _buy(alice, 1 ether);
+        _give(alice, 100_000 * U);
         uint256 r0 = staking.reserve();
         vm.prank(alice);
         token.transfer(address(staking), 100 * U);
