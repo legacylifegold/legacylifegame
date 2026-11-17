@@ -91,7 +91,7 @@ contract LLGAMEDeployment {
         _addLiquidity();
 
         if (funded >= POOL_BNB_SUPPLY) {
-            if (token.balanceOf(address(this)) != 0) revert LaunchCheckFailed();
+            // poolSupplied == POOL_SUPPLY here; LLGAME sent to this contract directly stays, unaccounted
             pair.transfer(DEAD, pair.balanceOf(address(this)));
             state = State.Closed;
         }

@@ -6,17 +6,17 @@ The values that shape the ecosystem, each listed once, with where it originates 
 
 | Name | Value | Origin | Comment |
 |---|---|---|---|
-| `POOL_SUPPLY` | 10,000 LLGAME | D `constant` | D `_launch` reserve subtraction → D check `balanceOf(D) == POOL_SUPPLY` → D `_addLiquidity` sends parts to the pair, tracked in `poolSupplied` → D `receive` close check `balanceOf(D) == 0` → D `abort` burns the rest |
-| `AUTHORS_SUPPLY` | 500,000 LLGAME | D `constant` | D `_launch` reserve subtraction → `approve(s, …)` → `s.stake(AUTHORS_SUPPLY, …)` → S `_stake` `amount`, giving a reward of 720,000, a budget of 50,000, and an AIRDROP remainder of 50,000 with a reward of 144,000 → D check on `activeStakeOf(AUTHORS)` |
+| `POOL_SUPPLY` | 10,000 LLGAME | D `constant` | D `_launch` reserve subtraction → D check `balanceOf(D) == POOL_SUPPLY` → D `_addLiquidity` sends parts to the pair, tracked in `poolSupplied`, which reaches `POOL_SUPPLY` in the closing round → D `abort` burns the rest |
+| `AUTHORS_SUPPLY` | 500,000 LLGAME | D `constant` | D `_launch` reserve subtraction → `approve(s, …)` → `s.stake(AUTHORS_SUPPLY, …)` → S `_stake` `amount`, giving a reward of 1,440,000, a budget of 100,000, and, the staker being a root without uplines, an AIRDROP remainder of 100,000 with a reward of 288,000 → D check on `activeStakeOf(AUTHORS)` |
 | `POOL_BNB_SUPPLY` | 16.9 BNB, `16_900_000_000_000_000_000` wei, ~$10,000 at 591.77 USDT per BNB | D constructor argument `poolBnbSupply_` | Checked in D `> 0`, `≤ uint112.max` → D `immutable POOL_BNB_SUPPLY` → D `_addLiquidity` (`target = POOL_SUPPLY × funded / POOL_BNB_SUPPLY`) → D `receive` close condition `funded ≥ POOL_BNB_SUPPLY`. Never leaves D |
 
 ## Tokenomics algorithmic parameters
 
 | Name&nbsp;&nbsp;&nbsp;&nbsp; | Value | Origin | Comment |
 |---|---|---|---|
-| Terms | 1080 days | S `_rate`, `_minStakeAmount` literals | S `_stake` check → `StakeInfo.term` → S `_accrued`, `withdraw` (`term × 1 days`) → copied to the S AIRDROP remainder stake and to S `delegateStake` parts |
-| Reward rates | 288 % (8% month) | S `_rate` literals | S `_stake` `reward = amount × rate / 100` and `airdropReward = remainder × rate / 100` → `StakeInfo.reward` → S `_accrued`, `_claim`, `withdraw`, and the pro-rata split in S `delegateStake` |
-| Minimum principal | 72,000,000 base units | S `_minStakeAmount` literals | S `_stake` → S `delegateStake` (both parts). The S AIRDROP remainder stake bypasses it because `_open` is direct |
+| Term | 1080 days | S `constant` `TERM` | S `_open` stamps every new stake, the AIRDROP remainder stake included, with `StakeInfo.start` → S `_accrued` (the reward accrues until `start + TERM`) and `withdraw` (matured at `start + TERM`). S `delegateStake` parts keep the original `start` |
+| Reward rate | 288 % (8% month) | S `constant` `RATE` | S `_stake` `reward = amount × RATE / 100` and `airdropReward = remainder × RATE / 100` → `StakeInfo.reward` → S `_accrued`, `_claim`, `withdraw`, and the pro-rata split in S `delegateStake` |
+| Minimum principal | 72,000,000 base units | S `constant` `MIN_STAKE` | S `_stake` → S `delegateStake` (both parts). The S AIRDROP remainder stake bypasses it because `_open` is direct |
 | `REFERRAL_PERCENT` | 20 | S `constant` | S `_stake` `budget = amount × 20 / 100` → reserve deduction → `remainder = budget − paid` → AIRDROP remainder stake |
 | Referral level share | `A / 10 >> (n−1)` | S `_payReferrals` literal `10` and shift | → `TOKEN.transfer(upline, share − cost)` → `paid` |
 | Referral eligibility threshold | `1 << (n−1)` LLGAME | S `_payReferrals` from `UNIT` | Compared separately with `TOKEN.balanceOf(upline)` and `activeStakeOf[upline]`. An upline that fails is passed over and the walk goes on |

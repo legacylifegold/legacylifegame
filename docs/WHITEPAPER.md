@@ -261,7 +261,7 @@ In `Funding`, `abort` removes the liquidity of the launch LP tokens, burns the L
 | LP tokens sent to `DEAD` at close | Liquidity is locked without a locker or owner; invariant 3 |
 | Creators' stake opened in the activation transaction | Locked for 1080 days by the same rules as every stake |
 
-After `Closed` the deployment contract holds no value and is inert. After `Aborted` it holds only BNB not yet refunded.
+After `Closed` the deployment contract holds none of the launch's value and is inert. LLGAME sent to it directly, at any time, is an unsolicited donation: it does not enter the pool, does not hinder the close and has no withdrawal path after it; an abort burns it with the rest. After `Aborted` it holds only BNB not yet refunded.
 
 ## 8. Parameters
 

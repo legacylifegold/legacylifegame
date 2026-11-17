@@ -226,6 +226,19 @@ contract LLGAMETest is Test {
         assertGt(pair.balanceOf(DEAD), 0);
     }
 
+    function test_LLGAME_DEPLOYMENT_CLOSE() public {
+        _launch(1 ether);
+        _buy(bob, 0.01 ether);
+        vm.prank(bob);
+        token.transfer(address(dep), 1); // dust sent to the deployment contract during funding
+        _fund(carol, 9 ether);
+        assertEq(uint8(dep.state()), uint8(LLGAMEDeployment.State.Closed));
+        assertEq(dep.poolSupplied(), 10_000 * U, "the pool got exactly POOL_SUPPLY");
+        assertEq(token.balanceOf(address(dep)), 1, "the donation stays, unaccounted");
+        assertGt(pair.balanceOf(DEAD), 0);
+        assertEq(pair.balanceOf(address(dep)), 0);
+    }
+
     function test_abortRefundsProRata() public {
         _launch(1 ether);
         _fund(alice, 3 ether);
