@@ -27,11 +27,14 @@ interface IWBNB {
 }
 
 /// @title LLGAME deployment contract
-/// @notice Launches the ecosystem on its first funding round and closes when funding reaches at least
-///         POOL_BNB_SUPPLY. Every round adds its BNB to the pool with LLGAME in proportion to it, at the fixed
-///         launch ratio POOL_SUPPLY / POOL_BNB_SUPPLY; the deployment contract holds the rest of POOL_SUPPLY
-///         until close. Its only privileged call is PUBLISHER's abort.
+/// @notice Launches the ecosystem in its own publication: the constructor creates the token, the staking
+///         contract and the pair and opens the creators' stake. Every funding round from then on adds its BNB
+///         to the pool with LLGAME in proportion to it, at the fixed launch ratio POOL_SUPPLY / POOL_BNB_SUPPLY;
+///         the deployment contract holds the rest of POOL_SUPPLY until funding reaches at least POOL_BNB_SUPPLY
+///         and closes. Its only privileged call is AUTHORS' abort: the publisher keeps no right over it.
 contract LLGAMEDeployment {
+    /// @dev NotLaunched keeps the numbering of the states and is never observed: a published contract is
+    ///      in Funding.
     enum State { NotLaunched, Funding, Closed, Aborted }
 
     address public constant DEAD = 0x000000000000000000000000000000000000dEaD;
@@ -44,7 +47,7 @@ contract LLGAMEDeployment {
     address public immutable AUTHORS;
     address public immutable AIRDROP;
     uint256 public immutable POOL_BNB_SUPPLY;
-    address public immutable PUBLISHER;
+    address public immutable PUBLISHER; // a record of the publication: no call checks it
 
     State public state;
     LLGAME public token;
@@ -57,15 +60,16 @@ contract LLGAMEDeployment {
 
     error InvalidParameter();
     error InvalidState();
-    error NotPublisher();
+    error NotAuthors();
     error NothingToRefund();
     error AddressMismatch();
     error LaunchCheckFailed();
     error RefundFailed();
 
-    /// @dev Non-payable; the sender becomes PUBLISHER. AUTHORS and AIRDROP must be distinct accounts and
-    ///      neither may be a fixed address known at publication: zero, DEAD, FACTORY or WBNB. The token,
-    ///      pair and staking contract do not exist before activation and are not checked.
+    /// @dev The activation transaction: non-payable, launches the ecosystem and leaves the contract in
+    ///      Funding with nothing funded. The sender is recorded as PUBLISHER. AUTHORS and AIRDROP must be
+    ///      distinct accounts and neither may be a fixed address known at publication: zero, DEAD, FACTORY or
+    ///      WBNB. The token, pair and staking contract do not exist before the launch and are not checked.
     constructor(address authors_, address airdrop_, uint256 poolBnbSupply_) {
         if (
             _isFixed(authors_) || _isFixed(airdrop_) || authors_ == airdrop_ || poolBnbSupply_ == 0
@@ -75,16 +79,14 @@ contract LLGAMEDeployment {
         AIRDROP = airdrop_;
         POOL_BNB_SUPPLY = poolBnbSupply_;
         PUBLISHER = msg.sender;
+        _launch(authors_, airdrop_);
     }
 
-    /// @notice A funding round: any sender, msg.value > 0, in NotLaunched or Funding.
+    /// @notice A funding round: any sender, msg.value > 0, in Funding.
     receive() external payable {
         if (msg.sender == address(WBNB)) return; // unwrapping during abort
         if (msg.value == 0) revert InvalidParameter();
-
-        State current = state;
-        if (current == State.NotLaunched) _launch();
-        else if (current != State.Funding) revert InvalidState();
+        if (state != State.Funding) revert InvalidState();
 
         funded += msg.value;
         depositOf[msg.sender] += msg.value;
@@ -97,16 +99,19 @@ contract LLGAMEDeployment {
         }
     }
 
-    /// @notice PUBLISHER only, in Funding: removes the launch liquidity, burns its LLGAME and the held rest of
+    /// @notice AUTHORS only, in Funding: removes the launch liquidity, burns its LLGAME and the held rest of
     ///         POOL_SUPPLY, keeps its BNB for refunds.
     function abort() external {
-        if (msg.sender != PUBLISHER) revert NotPublisher();
+        if (msg.sender != AUTHORS) revert NotAuthors();
         if (state != State.Funding) revert InvalidState();
         state = State.Aborted;
 
         IPancakePair p = pair;
-        p.transfer(address(p), p.balanceOf(address(this)));
-        p.burn(address(this));
+        uint256 liquidity = p.balanceOf(address(this));
+        if (liquidity != 0) { // none before the first round
+            p.transfer(address(p), liquidity);
+            p.burn(address(this));
+        }
 
         LLGAME t = token;
         t.burn(t.balanceOf(address(this)));
@@ -128,8 +133,11 @@ contract LLGAMEDeployment {
 
     // -------------------------------------------------------------- internals
 
-    function _launch() private {
-        // CREATE addresses of this contract: nonce 1 for the token, nonce 2 for the staking contract.
+    /// @dev Runs in the constructor only, where the immutables are not yet readable: AUTHORS and AIRDROP come
+    ///      as arguments.
+    function _launch(address authors_, address airdrop_) private {
+        // CREATE addresses of this contract, whose nonce is 1 from its creation on: nonce 1 for the token,
+        // nonce 2 for the staking contract.
         address predictedStaking = _createAddress(2);
 
         LLGAME t = new LLGAME();
@@ -139,18 +147,18 @@ contract LLGAMEDeployment {
         address p = FACTORY.getPair(address(t), address(WBNB));
         if (p == address(0)) p = FACTORY.createPair(address(t), address(WBNB));
 
-        LLGAMEStaking s = new LLGAMEStaking(t, AIRDROP, p);
+        LLGAMEStaking s = new LLGAMEStaking(t, airdrop_, p);
         if (address(s) != predictedStaking) revert AddressMismatch();
 
         // Before the token existed the pair could hold only an unsynchronised WBNB balance.
         IPancakePair(p).skim(DEAD);
 
         t.approve(address(s), AUTHORS_SUPPLY);
-        s.stake(AUTHORS_SUPPLY, AUTHORS);
+        s.stake(AUTHORS_SUPPLY, authors_);
 
         if (
             t.totalSupply() != total || t.balanceOf(address(this)) != POOL_SUPPLY || t.balanceOf(p) != 0
-                || t.balanceOf(address(s)) != total - POOL_SUPPLY || s.activeStakeOf(AUTHORS) != AUTHORS_SUPPLY
+                || t.balanceOf(address(s)) != total - POOL_SUPPLY || s.activeStakeOf(authors_) != AUTHORS_SUPPLY
         ) revert LaunchCheckFailed();
 
         token = t;

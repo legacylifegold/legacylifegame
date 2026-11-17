@@ -6,7 +6,7 @@ The values that shape the ecosystem, each listed once, with where it originates 
 
 | Name | Value | Origin | Comment |
 |---|---|---|---|
-| `POOL_SUPPLY` | 10,000 LLGAME | D `constant` | D `_launch` reserve subtraction → D check `balanceOf(D) == POOL_SUPPLY` → D `_addLiquidity` sends parts to the pair, tracked in `poolSupplied`, which reaches `POOL_SUPPLY` in the closing round → D `abort` burns the rest |
+| `POOL_SUPPLY` | 10,000 LLGAME | D `constant` | D `_launch`, run by the constructor: reserve subtraction → D check `balanceOf(D) == POOL_SUPPLY` → D `_addLiquidity`, run by every funding round, sends parts to the pair, tracked in `poolSupplied`, which reaches `POOL_SUPPLY` in the closing round → D `abort` burns the rest |
 | `AUTHORS_SUPPLY` | 500,000 LLGAME | D `constant` | D `_launch` reserve subtraction → `approve(s, …)` → `s.stake(AUTHORS_SUPPLY, …)` → S `_stake` `amount`, giving a reward of 1,440,000, a budget of 100,000, and, the staker being a root without uplines, an AIRDROP remainder of 100,000 with a reward of 288,000 → D check on `activeStakeOf(AUTHORS)` |
 | `POOL_BNB_SUPPLY` | 16.9 BNB, `16_900_000_000_000_000_000` wei, ~$10,000 at 591.77 USDT per BNB | D constructor argument `poolBnbSupply_` | Checked in D `> 0`, `≤ uint112.max` → D `immutable POOL_BNB_SUPPLY` → D `_addLiquidity` (`target = POOL_SUPPLY × funded / POOL_BNB_SUPPLY`) → D `receive` close condition `funded ≥ POOL_BNB_SUPPLY`. Never leaves D |
 
@@ -30,7 +30,7 @@ The values that shape the ecosystem, each listed once, with where it originates 
 
 | Name | Origin | Comment |
 |---|---|---|
-| `PUBLISHER` | D `constructor` (`msg.sender`) | D `immutable PUBLISHER` → D `abort()` (only caller) |
-| `AUTHORS` | D constructor argument `authors_` | Checked in D `_isFixed`, `≠ airdrop_` → D `immutable AUTHORS` → D `_launch` as `s.stake(…, AUTHORS)` → S `_stake` beneficiary → S `_open` stores `StakeInfo.staker` and `activeStakeOf[AUTHORS]` → S `_see(AUTHORS, D)` makes it a root, because D is excluded → D `_launch` check `activeStakeOf(AUTHORS) == AUTHORS_SUPPLY`. S has no constant for it |
-| `AIRDROP` | D constructor argument `airdrop_` | Checked in D `_isFixed`, `≠ authors_` → D `immutable AIRDROP` → D `_launch` as `new LLGAMEStaking(t, AIRDROP, p)` → S `immutable AIRDROP` → S `excluded()`, S `_stake` (allowed as beneficiary, staker of remainder stakes), S `delegateStake` (caller refused, allowed as delegate) |
+| `PUBLISHER` | D `constructor` (`msg.sender`) | D `immutable PUBLISHER`, read through its getter alone: no call checks it |
+| `AUTHORS` | D constructor argument `authors_` | Checked in D `_isFixed`, `≠ airdrop_` → D `immutable AUTHORS` → D `abort()` (only caller); D constructor → D `_launch(authors_, …)` as `s.stake(…, authors_)` → S `_stake` beneficiary → S `_open` stores `StakeInfo.staker` and `activeStakeOf[AUTHORS]` → S `_see(AUTHORS, D)` makes it a root, because D is excluded → D `_launch` check `activeStakeOf(authors_) == AUTHORS_SUPPLY`. S has no constant for it |
+| `AIRDROP` | D constructor argument `airdrop_` | Checked in D `_isFixed`, `≠ authors_` → D `immutable AIRDROP`; D constructor → D `_launch(…, airdrop_)` as `new LLGAMEStaking(t, airdrop_, p)` → S `immutable AIRDROP` → S `excluded()`, S `_stake` (allowed as beneficiary, staker of remainder stakes), S `delegateStake` (caller refused, allowed as delegate) |
 | Name / symbol | T constructor literals | "Legacy Life Game" / LLGAME. T `ERC20`, `ERC20Permit` domain |
