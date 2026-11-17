@@ -26,7 +26,7 @@ The token and the staking contract are the same source on both branches: the ter
 
 The testnet addresses are those the PancakeSwap v2 testnet router `0xD99D1c33F9fC3444f8101754aBC46c52416550D1` [3] returns on chain 97 from `factory()` and `WETH()`; that factory's `INIT_CODE_PAIR_HASH()` is `0xd0d4c4cd0848c93cb4fd1f498d7013ee6bfb25783ea21593d5834f5d250ece66`.
 
-On BSC testnet the two mainnet addresses hold code as well, which is not the PancakeSwap testnet deployment (what it is: NOT VERIFIED). A `main` build published there is therefore not refused: it would activate against that code. The published contract is read back before any funding (Checks).
+On BSC testnet the two mainnet addresses hold code as well, which is not the PancakeSwap testnet deployment (what it is: NOT VERIFIED). A `main` build published there therefore meets code, not an empty address: its publication runs the launch against that code and fails or completes as that code answers (which: NOT VERIFIED). The published contract is read back before any funding (Checks).
 
 `AUTHORS`, `AIRDROP` and `POOL_BNB_SUPPLY` are constructor arguments and no matter of the branch. A testnet publication may name a `POOL_BNB_SUPPLY` far below the production one, which moves the launch price with it.
 
@@ -45,7 +45,7 @@ cast call <deployment> 'FACTORY()(address)' --rpc-url <endpoint>
 cast call <deployment> 'WBNB()(address)' --rpc-url <endpoint>
 ```
 
-A contract published from the wrong branch is abandoned unfunded: before its first funding round it holds nothing and has created nothing.
+A contract published from the wrong branch is abandoned unfunded, or aborted by `AUTHORS`: its publication created a token, a staking contract and a pair of its own, which bind nothing else, and before its first funding round it holds no BNB.
 
 ## Testing at testnet
 
@@ -79,4 +79,4 @@ forge create contracts/LLGAMEDeployment.sol:LLGAMEDeployment \
     --constructor-args <AUTHORS> <AIRDROP> <POOL_BNB_SUPPLY in wei>
 ```
 
-The read-back of Checks follows the publication and precedes the activation transaction. A production deployment is never built while `bsc_testnet` is checked out, and never from a tree with uncommitted changes.
+The read-back of Checks follows the publication, which is the activation transaction, and precedes the first funding round. A production deployment is never built while `bsc_testnet` is checked out, and never from a tree with uncommitted changes.

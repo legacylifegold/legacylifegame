@@ -52,6 +52,7 @@ contract LLGAMETest is Test {
     address publisher = makeAddr("publisher");
     address authors = makeAddr("authors");
     address airdrop = makeAddr("airdrop");
+    address funder = makeAddr("funder");
     address alice = makeAddr("alice");
     address bob = makeAddr("bob");
     address carol = makeAddr("carol");
@@ -71,10 +72,14 @@ contract LLGAMETest is Test {
         wbnb = WBNB9(BSC_WBNB);
         deployCodeTo("PancakeFactory.sol:PancakeFactory", abi.encode(address(this)), BSC_FACTORY);
         factory = IFactory(BSC_FACTORY);
+        // the publication is the launch: the ecosystem exists from here on, unfunded
         vm.prank(publisher);
         dep = new LLGAMEDeployment(authors, airdrop, POOL_BNB_SUPPLY);
         assertEq(address(dep.FACTORY()), BSC_FACTORY);
         assertEq(address(dep.WBNB()), BSC_WBNB);
+        token = dep.token();
+        staking = dep.staking();
+        pair = IPair(address(dep.pair()));
     }
 
     function _fund(address who, uint256 v) internal {
@@ -84,11 +89,9 @@ contract LLGAMETest is Test {
         require(ok, "fund failed");
     }
 
-    function _launch(uint256 v) internal {
-        _fund(publisher, v);
-        token = dep.token();
-        staking = dep.staking();
-        pair = IPair(address(dep.pair()));
+    /// @dev Funds the whole POOL_BNB_SUPPLY in one round: the pool holds POOL_SUPPLY and funding is closed.
+    function _close() internal {
+        _fund(funder, POOL_BNB_SUPPLY);
     }
 
     function _buy(address user, uint256 bnb) internal returns (uint256 out) {
@@ -130,17 +133,21 @@ contract LLGAMETest is Test {
 
     // syngate: LEGACY-LIFE-GAME-BSC-DEPLOYMENT-ACTIVATION launch
     function test_launch() public {
-        _launch(0.1 ether);
+        // the constructor alone, run in setUp with no round sent, has launched the ecosystem
         assertEq(uint8(dep.state()), uint8(LLGAMEDeployment.State.Funding));
+        assertEq(dep.PUBLISHER(), publisher);
+        assertEq(dep.funded(), 0, "nothing funded");
+        assertEq(address(dep).balance, 0);
         assertEq(token.decimals(), 9);
         assertEq(token.totalSupply(), TOTAL);
-        // 0.1 of 10 BNB: the pool gets 1% of POOL_SUPPLY, the rest is held until close
-        assertEq(token.balanceOf(address(pair)), 100 * U);
-        assertEq(token.balanceOf(address(dep)), 9_900 * U);
-        assertEq(dep.poolSupplied(), 100 * U);
+        assertEq(address(pair), factory.getPair(address(token), address(wbnb)), "the canonical pair");
+        // the pool is empty: the whole POOL_SUPPLY is held for the funding rounds
+        assertEq(pair.totalSupply(), 0);
+        assertEq(token.balanceOf(address(pair)), 0);
+        assertEq(wbnb.balanceOf(address(pair)), 0);
+        assertEq(token.balanceOf(address(dep)), 10_000 * U);
+        assertEq(dep.poolSupplied(), 0);
         assertEq(token.balanceOf(address(staking)), TOTAL - 10_000 * U);
-        assertGt(pair.balanceOf(address(dep)), 0);
-        assertEq(wbnb.balanceOf(address(pair)), 0.1 ether);
 
         // creators' stake and its AIRDROP remainder stake
         LLGAMEStaking.StakeInfo memory a = staking.stakeInfo(0);
@@ -156,19 +163,40 @@ contract LLGAMETest is Test {
         assertTrue(staking.seen(authors));
         assertEq(staking.referrerOf(authors), address(0));
         _assertSolvent();
+
+        // no BNB can be attached to the publication: the same creation succeeds without it and fails with it
+        bytes memory init =
+            abi.encodePacked(type(LLGAMEDeployment).creationCode, abi.encode(authors, airdrop, POOL_BNB_SUPPLY));
+        vm.deal(address(this), 1 ether);
+        address bare;
+        address paid;
+        assembly {
+            bare := create(0, add(init, 0x20), mload(init))
+            paid := create(1, add(init, 0x20), mload(init))
+        }
+        assertTrue(bare != address(0), "publication without BNB");
+        assertEq(paid, address(0), "publication with BNB attached");
     }
 
     // syngate: LEGACY-LIFE-GAME-BSC-DEPLOYMENT-ACTIVATION pair
     function test_precreatedPairDonationSkimmed() public {
-        // predict the token address (deployment nonce 1) and pre-create the pair with a WBNB donation
-        address predictedToken = vm.computeCreateAddress(address(dep), 1);
+        // predict the publisher's next deployment contract and its token (the contract's nonce 1), and
+        // pre-create the pair with a WBNB donation
+        address predicted = vm.computeCreateAddress(publisher, vm.getNonce(publisher));
+        address predictedToken = vm.computeCreateAddress(predicted, 1);
         address p = factory.createPair(predictedToken, address(wbnb));
         vm.deal(address(this), 5 ether);
         wbnb.deposit{value: 5 ether}();
         wbnb.transfer(p, 5 ether);
-        _launch(0.1 ether);
-        assertEq(address(pair), p);
+
+        vm.prank(publisher);
+        dep = new LLGAMEDeployment(authors, airdrop, POOL_BNB_SUPPLY);
+        assertEq(address(dep), predicted);
+        assertEq(address(dep.token()), predictedToken);
+        assertEq(address(dep.pair()), p);
         assertEq(wbnb.balanceOf(DEAD), 5 ether);
+        assertEq(wbnb.balanceOf(p), 0, "the pool starts empty");
+        _fund(funder, 0.1 ether);
         assertEq(wbnb.balanceOf(p), 0.1 ether);
     }
 
@@ -179,8 +207,12 @@ contract LLGAMETest is Test {
 
     // syngate: LEGACY-LIFE-GAME-BSC-DEPLOYMENT-ROUNDS
     function test_roundsAndClose() public {
-        _launch(1 ether);
+        _fund(funder, 1 ether); // the first round finds the pool empty
         assertEq(_poolLlgame(), 1_000 * U);
+        assertEq(token.balanceOf(address(dep)), 9_000 * U);
+        assertEq(dep.poolSupplied(), 1_000 * U);
+        assertEq(wbnb.balanceOf(address(pair)), 1 ether);
+        assertEq(dep.depositOf(funder), 1 ether);
         uint256 lp1 = pair.balanceOf(address(dep));
         _fund(alice, 4 ether);
         assertEq(_poolLlgame(), 5_000 * U, "LLGAME in proportion to BNB");
@@ -203,7 +235,7 @@ contract LLGAMETest is Test {
         vm.prank(dave);
         (bool ok,) = address(dep).call{value: 1 ether}("");
         assertFalse(ok, "funding after close");
-        vm.prank(publisher);
+        vm.prank(authors);
         vm.expectRevert(LLGAMEDeployment.InvalidState.selector);
         dep.abort();
     }
@@ -226,15 +258,18 @@ contract LLGAMETest is Test {
     }
 
     // syngate: LEGACY-LIFE-GAME-BSC-DEPLOYMENT-CLOSE one_round
-    function test_launchAndCloseInOneRound() public {
-        _launch(POOL_BNB_SUPPLY);
+    function test_closeInOneRound() public {
+        _fund(funder, POOL_BNB_SUPPLY); // the first round after the publication
         assertEq(uint8(dep.state()), uint8(LLGAMEDeployment.State.Closed));
+        assertEq(_poolLlgame(), 10_000 * U);
+        assertEq(token.balanceOf(address(dep)), 0);
         assertGt(pair.balanceOf(DEAD), 0);
+        assertEq(pair.balanceOf(address(dep)), 0);
     }
 
     // syngate: LEGACY-LIFE-GAME-BSC-DEPLOYMENT-CLOSE donation
     function test_LLGAME_DEPLOYMENT_CLOSE() public {
-        _launch(1 ether);
+        _fund(funder, 1 ether);
         _buy(bob, 0.01 ether);
         vm.prank(bob);
         token.transfer(address(dep), 1); // dust sent to the deployment contract during funding
@@ -248,15 +283,20 @@ contract LLGAMETest is Test {
 
     // syngate: LEGACY-LIFE-GAME-BSC-DEPLOYMENT-ABORT
     function test_abortRefundsProRata() public {
-        _launch(1 ether);
+        _fund(funder, 1 ether);
         _fund(alice, 3 ether);
         _buy(bob, 2 ether); // a buyer's BNB enters the pool before the abort
 
-        vm.expectRevert(LLGAMEDeployment.NotPublisher.selector);
+        // AUTHORS alone: neither a funder nor the publisher
+        vm.prank(alice);
+        vm.expectRevert(LLGAMEDeployment.NotAuthors.selector);
+        dep.abort();
+        vm.prank(publisher);
+        vm.expectRevert(LLGAMEDeployment.NotAuthors.selector);
         dep.abort();
 
         uint256 supplyBefore = token.totalSupply();
-        vm.prank(publisher);
+        vm.prank(authors);
         dep.abort();
         assertEq(uint8(dep.state()), uint8(LLGAMEDeployment.State.Aborted));
         // the held 6,000 LLGAME and the pool's LLGAME are burned
@@ -269,9 +309,12 @@ contract LLGAMETest is Test {
         vm.prank(alice);
         dep.refund();
         assertEq(alice.balance, w * 3 ether / 4 ether);
-        vm.prank(publisher);
+        vm.prank(funder);
         dep.refund();
-        assertEq(publisher.balance, w * 1 ether / 4 ether);
+        assertEq(funder.balance, w * 1 ether / 4 ether);
+        vm.prank(authors);
+        vm.expectRevert(LLGAMEDeployment.NothingToRefund.selector);
+        dep.refund(); // the abort gives AUTHORS nothing
         vm.prank(alice);
         vm.expectRevert(LLGAMEDeployment.NothingToRefund.selector);
         dep.refund();
@@ -280,13 +323,21 @@ contract LLGAMETest is Test {
         vm.prank(dave);
         (bool ok,) = address(dep).call{value: 1 ether}("");
         assertFalse(ok, "funding after abort");
+
+        // before the first round there is no liquidity to remove: the held POOL_SUPPLY is burned, nothing is recovered
+        LLGAMEDeployment unfunded = new LLGAMEDeployment(authors, airdrop, POOL_BNB_SUPPLY);
+        vm.prank(authors);
+        unfunded.abort();
+        assertEq(uint8(unfunded.state()), uint8(LLGAMEDeployment.State.Aborted));
+        assertEq(unfunded.token().totalSupply(), TOTAL - 10_000 * U);
+        assertEq(unfunded.withdrawn(), 0);
     }
 
     // --------------------------------------------------------------- referral
 
     // syngate: LEGACY-LIFE-GAME-BSC-REFERRAL-SHARE payout
     function test_referralBindingAndPayout() public {
-        _launch(10 ether);
+        _close();
         _give(alice, 100_000 * U);
         assertFalse(staking.seen(alice), "a purchase marks nothing");
         assertEq(staking.referrerOf(alice), address(0));
@@ -326,7 +377,7 @@ contract LLGAMETest is Test {
 
     // syngate: LEGACY-LIFE-GAME-BSC-REFERRAL-SHARE threshold
     function test_payoutNeedsLiquidAndStakeAtEveryLevel() public {
-        _launch(10 ether);
+        _close();
         _give(alice, 100_000 * U);
         _stake(alice, 10_000 * U, alice);
         vm.prank(alice);
@@ -361,7 +412,7 @@ contract LLGAMETest is Test {
     // LEGACY-LIFE-GAME-BSC-REFERRAL-WALK
     // syngate: LEGACY-LIFE-GAME-BSC-REFERRAL-PASS-OVER
     function test_ineligibleUplineIsPassedOver() public {
-        _launch(10 ether);
+        _close();
         _give(alice, 100_000 * U);
         // alice → bob → carol referral chain
         _stake(alice, 10_000 * U, alice);
@@ -397,7 +448,7 @@ contract LLGAMETest is Test {
     // LEGACY-LIFE-GAME-BSC-REFERRAL-WALK
     // syngate: LEGACY-LIFE-GAME-BSC-REFERRAL-WALK-END share_not_worth
     function test_walkEndsWhereShareIsNotWorthLevelGas() public {
-        _launch(10 ether);
+        _close();
         _give(alice, 100_000 * U);
         // alice → bob → carol referral chain, both uplines eligible
         _stake(alice, 10_000 * U, alice);
@@ -446,7 +497,7 @@ contract LLGAMETest is Test {
     // LEGACY-LIFE-GAME-BSC-REFERRAL-WALK
     // syngate: LEGACY-LIFE-GAME-BSC-REFERRAL-GAS-CHARGE passed_level
     function test_gasOfPassedLevelRefundedFromItsShare() public {
-        _launch(10 ether);
+        _close();
         _give(alice, 100_000 * U);
         _stake(alice, 10_000 * U, alice);
         vm.prank(alice);
@@ -479,7 +530,7 @@ contract LLGAMETest is Test {
     // LEGACY-LIFE-GAME-BSC-REFERRAL-WALK
     // syngate: LEGACY-LIFE-GAME-BSC-REFERRAL-WALK-END deep
     function test_deepWalkEndsBeforeShareBelowItsGas() public {
-        _launch(10 ether);
+        _close();
         address s = _chain(8, "deep-");
         address top = makeAddr("deep-0");
         address direct = makeAddr("deep-7");
@@ -535,7 +586,7 @@ contract LLGAMETest is Test {
     ///      of a level are cold, as they are on chain. The contract measures the gas itself, with gasleft().
     // syngate: LEGACY-LIFE-GAME-BSC-REFERRAL-GAS-CHARGE measured
     function test_levelGasMeasured() public {
-        _launch(10 ether);
+        _close();
         uint256 prev = _walkGas(1);
         uint256 maxLevel;
         for (uint256 d = 2; d <= 8; d++) {
@@ -551,7 +602,7 @@ contract LLGAMETest is Test {
     // LEGACY-LIFE-GAME-BSC-REFERRAL-WALK
     // syngate: LEGACY-LIFE-GAME-BSC-REFERRAL-WALK-END root
     function test_rootStakerReadsNoReserves() public {
-        _launch(10 ether);
+        _close();
         _give(alice, 100_000 * U);
         uint256 nextId = staking.nextStakeId();
         vm.expectCall(address(pair), abi.encodeWithSelector(IPair.getReserves.selector), 0);
@@ -565,7 +616,7 @@ contract LLGAMETest is Test {
     // LEGACY-LIFE-GAME-BSC-REFERRAL-WALK
     // syngate: LEGACY-LIFE-GAME-BSC-REFERRAL-PRICE-GUARD current
     function test_currentPriceBeforeReferenceStored() public {
-        _launch(10 ether);
+        _close();
         _give(alice, 100_000 * U);
         _stake(alice, 10_000 * U, alice);
         vm.prank(alice);
@@ -599,7 +650,7 @@ contract LLGAMETest is Test {
     // LEGACY-LIFE-GAME-BSC-REFERRAL-WALK
     // syngate: LEGACY-LIFE-GAME-BSC-REFERRAL-PRICE-GUARD dropped
     function test_droppedPriceValuedAtReference() public {
-        _launch(10 ether);
+        _close();
         _give(alice, 100_000 * U);
         _stake(alice, 10_000 * U, alice);
         vm.prank(alice);
@@ -657,7 +708,7 @@ contract LLGAMETest is Test {
 
     // syngate: LEGACY-LIFE-GAME-BSC-REFERRAL-BINDING airdrop
     function test_airdropNeverRefers() public {
-        _launch(10 ether);
+        _close();
         _give(alice, 100_000 * U);
         _stake(alice, 1_000 * U, airdrop); // anyone may stake for AIRDROP
         assertGt(staking.activeStakeOf(airdrop), 0);
@@ -671,7 +722,7 @@ contract LLGAMETest is Test {
 
     // syngate: LEGACY-LIFE-GAME-BSC-REFERRAL-BINDING unseen
     function test_stakeForUnseenBeneficiaryBindsPayer() public {
-        _launch(10 ether);
+        _close();
         _give(alice, 100_000 * U);
         _stake(alice, 1_000 * U, alice);
         _stake(alice, 500 * U, bob);
@@ -681,7 +732,7 @@ contract LLGAMETest is Test {
 
     // syngate: LEGACY-LIFE-GAME-BSC-STAKE-BENEFICIARY
     function test_excludedBeneficiaryRejected() public {
-        _launch(10 ether);
+        _close();
         _give(alice, 100_000 * U);
         vm.startPrank(alice);
         token.approve(address(staking), 1_000 * U);
@@ -699,7 +750,7 @@ contract LLGAMETest is Test {
     // syngate: LEGACY-LIFE-GAME-BSC-STAKE-CLAIM
     // syngate: LEGACY-LIFE-GAME-BSC-STAKE-WITHDRAW
     function test_claimWithdraw() public {
-        _launch(10 ether);
+        _close();
         _give(alice, 100_000 * U);
         uint256 id = _stake(alice, 1_000 * U, alice);
         vm.warp(block.timestamp + 540 days);
@@ -728,7 +779,7 @@ contract LLGAMETest is Test {
 
     // syngate: LEGACY-LIFE-GAME-BSC-STAKE-DELEGATION
     function test_delegate() public {
-        _launch(10 ether);
+        _close();
         _give(alice, 100_000 * U);
         uint256 id = _stake(alice, 1_000 * U, alice);
 
@@ -797,7 +848,7 @@ contract LLGAMETest is Test {
 
     // syngate: LEGACY-LIFE-GAME-BSC-STAKE-PERMIT
     function test_stakeWithPermit() public {
-        _launch(10 ether);
+        _close();
         (address owner, uint256 pk) = makeAddrAndKey("owner");
         _give(owner, 100_000 * U);
         uint256 amount = 1_000 * U;
@@ -817,7 +868,7 @@ contract LLGAMETest is Test {
 
     // syngate: LEGACY-LIFE-GAME-BSC-REFERRAL-BINDING transfer
     function test_transferBindsNothing() public {
-        _launch(10 ether);
+        _close();
         _give(alice, 100_000 * U);
         _stake(alice, 1_000 * U, alice);
         vm.prank(alice);
@@ -832,7 +883,7 @@ contract LLGAMETest is Test {
 
     // syngate: LEGACY-LIFE-GAME-BSC-STAKE-DONATION
     function test_donationNotCredited() public {
-        _launch(10 ether);
+        _close();
         _give(alice, 100_000 * U);
         uint256 r0 = staking.reserve();
         vm.prank(alice);
@@ -860,7 +911,7 @@ contract LLGAMETest is Test {
 
     // syngate: LEGACY-LIFE-GAME-BSC-STAKE-ALLOCATION
     function test_stakeAllocatesRewardAndBudget() public {
-        _launch(10 ether);
+        _close();
         _give(alice, 100_000 * U);
         uint256 r0 = staking.reserve();
         uint256 id = _stake(alice, 1_000 * U, alice);
@@ -879,7 +930,7 @@ contract LLGAMETest is Test {
 
     // syngate: LEGACY-LIFE-GAME-BSC-REFERRAL-REMAINDER
     function test_unpaidBudgetBecomesAirdropStake() public {
-        _launch(10 ether);
+        _close();
         _give(alice, 100_000 * U);
         uint256 id = _stake(alice, 1_000 * U, alice); // a root: no upline is paid
         LLGAMEStaking.StakeInfo memory d = staking.stakeInfo(id + 1);

@@ -39,8 +39,8 @@ The operational ecosystem consists of two locked contracts and a DEX pair, launc
 | Token (`LLGAME`) | OpenZeppelin v5 `ERC20`, `ERC20Burnable`, `ERC20Permit`, 9 decimals, no access control module, no transfer hook and no reference to another contract of the ecosystem | None: locked at launch |
 | Pool | PancakeSwap v2 LLGAME/WBNB pair, launch LP position sent to `DEAD` at close | None: the pair is DEX code, its protocol `feeTo` share excepted |
 | Staking | Holds the reserve, the ecosystem-account set and the referral forest; binds an account to the payer of the first stake opened for it or to the staker delegating to it; takes stakes paid by their caller for a beneficiary, splits a part of a stake to a delegate at its staker's request, allocates rewards, pays referral shares to eligible uplines, records any non-zero unpaid referral remainder as an `AIRDROP` stake inside the stake call | None: locked at launch |
-| Deployment contract | Launcher published without attached BNB and with immutable parameters; creates the ecosystem on its first funding round and closes when funding reaches at least `POOL_BNB_SUPPLY` | No owner, setter or withdrawal function; `PUBLISHER` may abort before close |
-| `AUTHORS` address | Fixed beneficiary of the creators' stake; an ordinary account with no exclusion or contract privilege | Its key or multisig policy controls only that account; it has no contract privilege |
+| Deployment contract | Launcher published without attached BNB and with immutable parameters; creates the ecosystem in its own publication, takes the funding rounds into the pool and closes when funding reaches at least `POOL_BNB_SUPPLY` | No owner, setter or withdrawal function and no right of its publisher; `AUTHORS` may abort before close |
+| `AUTHORS` address | Fixed beneficiary of the creators' stake and the one account able to abort the funding; to the token and the staking contract an ordinary account with no exclusion or privilege | Its key or multisig policy controls that account and the deployment contract's abort during funding; it has no right over a locked contract |
 | `AIRDROP` address | Special address whose stakes accumulate unpaid referral-budget remainders for later airdrops; cannot participate in the referral program as referrer or referred account | Its key or multisig policy claims and withdraws under the common staking rules |
 
 ### 1.1 Terms
@@ -54,8 +54,9 @@ The operational ecosystem consists of two locked contracts and a DEX pair, launc
 | Stake reserve | LLGAME in the staking contract not allocated to any stake |
 | Referral budget | 20% of each ordinary stake's amount, taken from the stake reserve at stake time and paid recursively to eligible uplines by the halving share formula; any non-zero unpaid remainder is recorded as an `AIRDROP` stake |
 | Operator | The party running the game; it cannot change the locked contracts or their payout rules |
-| Deployment contract | A launcher published without attached BNB and with immutable launch parameters; its first funding round creates the ecosystem, and the round bringing the total to at least `POOL_BNB_SUPPLY` closes the funding |
-| Activation transaction | The first funding round: a permissionless BNB transfer to the deployment contract that creates the token, staking contract and pool, funds liquidity and opens the creators' stake |
+| Deployment contract | A launcher published without attached BNB and with immutable launch parameters; its publication creates the ecosystem, and the funding round bringing the total to at least `POOL_BNB_SUPPLY` closes the funding |
+| Activation transaction | The publication of the deployment contract: its constructor creates the token, staking contract and pair and opens the creators' stake, with no BNB attached and the pool left empty |
+| Funding round | A permissionless BNB transfer to the deployment contract, entering the pool with LLGAME in proportion to it |
 | Funding | From the activation transaction until close or abort (section 7) |
 | `derived` | Marks a statement that follows from the rules stated elsewhere, not a separate rule |
 
@@ -63,7 +64,7 @@ The operational ecosystem consists of two locked contracts and a DEX pair, launc
 
 Every part of the ecosystem is bound by the following; the requirements of sections 3 to 7 are consequences of these invariants.
 
-1. **Locked at launch.** The token and the staking contract are locked contracts. No proxy, upgradeable part or contract-administration signer exists in the token or staking contracts; the deployment contract's only privileged call is `PUBLISHER`'s abort during funding.
+1. **Locked at launch.** The token and the staking contract are locked contracts. No proxy, upgradeable part or contract-administration signer exists in the token or staking contracts; the deployment contract's only privileged call is `AUTHORS`' abort during funding.
 2. **No mint after creation.** The token's constructor mints the whole supply and no function can mint again. Every staking reward and referral allocation is funded from the staking contract's pre-minted holdings.
 3. **No administration of value.** No key can move LLGAME out of a locked contract except through its fixed rules: staking principal withdrawal, reward claim, and referral payout. From close, the launch LP position is irretrievably held at `DEAD`; during funding only an abort removes its liquidity, refunding funders; PancakeSwap may separately mint protocol-fee LP shares to its configured `feeTo` address under the DEX's own rules, as described in section 4. `AIRDROP` claims and withdraws under the common rules and has no administrative right over any contract.
 4. **Fixed conditions.** The staking term and rate, the referral budget and referral formula, the fixed `AUTHORS` beneficiary, the `AIRDROP` address and the fixed ecosystem-account exclusion set are immutable or constants of the contracts that use them.
@@ -201,7 +202,7 @@ The referral budget is `floor(20 × A / 100)` base units. Each level's share is 
 
 ## 7. Deployment contract
 
-The deployment contract launches and funds the ecosystem. Its constructor fixes the launch parameters as immutables and records its sender as `PUBLISHER`; `AUTHORS_SUPPLY` is a predefined constant. It has no owner, setter or upgrade path; its only privileged call is `PUBLISHER`'s abort during funding.
+The deployment contract launches and funds the ecosystem. Its constructor fixes the launch parameters as immutables, launches the ecosystem and records its sender as `PUBLISHER`, a record no call checks: the publisher keeps no right over the contract. `AUTHORS_SUPPLY` is a predefined constant. The contract has no owner, setter or upgrade path; its only privileged call is `AUTHORS`' abort during funding.
 
 ### 7.1 Interface
 
@@ -210,58 +211,62 @@ The deployment contract launches and funds the ecosystem. Its constructor fixes 
 contract Deployment {
     uint256 private constant AUTHORS_SUPPLY = 500_000 * 10 ** 9;
 
-    enum State { NotLaunched, Funding, Closed, Aborted }
+    enum State { NotLaunched, Funding, Closed, Aborted }   // NotLaunched is never observed
 
-    // Non-payable; the sender becomes PUBLISHER.
+    // The activation transaction: non-payable; the sender is recorded as PUBLISHER.
     constructor(address authors_, address airdrop_, uint256 poolBnbSupply_);
 
-    // A funding round: any sender, msg.value > 0, in NotLaunched or Funding.
+    // A funding round: any sender, msg.value > 0, in Funding.
     receive() external payable;
 
-    function abort() external;    // PUBLISHER only, in Funding
+    function abort() external;    // AUTHORS only, in Funding
     function refund() external;   // a funder, in Aborted, once
 
-    function PUBLISHER() external view returns (address);
+    function PUBLISHER() external view returns (address);                // the sender of the publication
     function state() external view returns (State);
     function funded() external view returns (uint256);                   // BNB of all rounds
     function depositOf(address funder) external view returns (uint256);
 }
 ```
 
-### 7.2 Funding
+### 7.2 Activation and funding
 
-A funding round is a native BNB transfer in state `NotLaunched` or `Funding` with `msg.value > 0`; any other transfer reverts. Each round adds `msg.value` to `funded()` and to the sender's `depositOf`.
-
-The first round is the activation transaction. It:
+The activation transaction is the publication itself: the constructor is non-payable, so no BNB enters with it. After fixing the parameters it:
 - deploys the token, which mints the full supply to the deployment contract;
 - transfers `TOTAL_SUPPLY − POOL_SUPPLY − AUTHORS_SUPPLY` to the staking contract's predicted address;
+- resolves the canonical pair, creating it if absent;
 - deploys the staking contract with its reserve present and `excluded` fixed;
-- resolves the canonical pair, creating it if absent, and skims its WBNB balance to `DEAD`;
+- skims the pair's WBNB balance to `DEAD`;
 - opens the creators' 1080-day stake for `AUTHORS`;
-- verifies the total supply, the balance split, the creators' stake and a deployment-contract token balance of `POOL_SUPPLY`;
-- enters `Funding`.
+- verifies the total supply, the balance split, the creators' stake, a pair holding no LLGAME and a deployment-contract token balance of `POOL_SUPPLY`;
+- enters `Funding`, with nothing funded and the pool empty.
 
-Every round, the first included, adds its BNB to the pool with LLGAME in proportion to it, `POOL_SUPPLY` per `POOL_BNB_SUPPLY`, minting LP tokens to the deployment contract. The deployment contract holds the rest of `POOL_SUPPLY` until full funding.
+A published deployment contract is therefore in `Funding`: `NotLaunched`, the zero value of `State`, keeps the numbering of the states and is never observed.
 
-The round that brings `funded()` to at least `POOL_BNB_SUPPLY` adds the rest of `POOL_SUPPLY`, sends the launch LP tokens to `DEAD` and enters `Closed`. A first round of at least `POOL_BNB_SUPPLY` launches and closes in one transaction.
+A funding round is a native BNB transfer in state `Funding` with `msg.value > 0`; any other transfer reverts. Each round adds `msg.value` to `funded()` and to the sender's `depositOf`, and adds its BNB to the pool with LLGAME in proportion to it, `POOL_SUPPLY` per `POOL_BNB_SUPPLY`, minting LP tokens to the deployment contract. The deployment contract holds the rest of `POOL_SUPPLY` until full funding.
+
+The round that brings `funded()` to at least `POOL_BNB_SUPPLY` adds the rest of `POOL_SUPPLY`, sends the launch LP tokens to `DEAD` and enters `Closed`. A first round of at least `POOL_BNB_SUPPLY` funds and closes in one transaction.
 
 ### 7.3 Abort
 
-In `Funding`, `abort` removes the liquidity of the launch LP tokens, burns the LLGAME received and the LLGAME still held, unwraps the WBNB received as `withdrawn` and enters `Aborted`. Each funder's `refund` pays `floor(withdrawn × depositOf(funder) / funded())` once. The token and staking contract remain as launched.
+In `Funding`, `abort`, which `AUTHORS` alone may call, removes the liquidity of the launch LP tokens, burns the LLGAME received and the LLGAME still held, unwraps the WBNB received as `withdrawn` and enters `Aborted`. Before the first round there are no LP tokens: the abort then burns the whole `POOL_SUPPLY` and recovers nothing. Each funder's `refund` pays `floor(withdrawn × depositOf(funder) / funded())` once. The token and staking contract remain as launched.
 
 ### 7.4 Guarantees
 
 | Property | Guarantee held |
 |---|---|
-| Published separately without attached BNB | The launch configuration can be inspected before any funding |
+| Ecosystem created by the publication, without attached BNB | The token, the staking contract, the pair and the launch configuration can be inspected before any funding |
 | Every launch value a constant or immutable | Nobody can change `AUTHORS`, `AIRDROP`, `POOL_BNB_SUPPLY` or any economic parameter after publication |
-| Round bounds and states | The launch happens once; every round enters the pool; funding closes at `POOL_BNB_SUPPLY` or more; nothing is accepted after `Closed` or `Aborted`; `abort` is impossible after `Closed` |
+| Round bounds and states | The launch happens once, in the constructor; every round enters the pool; funding closes at `POOL_BNB_SUPPLY` or more; nothing is accepted after `Closed` or `Aborted`; `abort` is impossible after `Closed` |
 | Nonce-predicted `CREATE` addresses | The reserve sent to the staking contract's address before it exists and the staking contract's `excluded` set are correct by construction |
 | Canonical pair | Only the factory-computed pair is used |
 | LP tokens sent to `DEAD` at close | Liquidity is locked without a locker or owner; invariant 3 |
 | Creators' stake opened in the activation transaction | Locked for 1080 days by the same rules as every stake |
+| Abort held by `AUTHORS`, none by the publisher | The key that signs the publication keeps no right over the launch; funding is undone only by the fixed beneficiary of the creators' stake, and refunds every funder pro rata |
 
 After `Closed` the deployment contract holds none of the launch's value and is inert. LLGAME sent to it directly, at any time, is an unsolicited donation: it does not enter the pool, does not hinder the close and has no withdrawal path after it; an abort burns it with the rest. After `Aborted` it holds only BNB not yet refunded.
+
+Between the activation transaction and the first round the pair holds no liquidity, and the only LLGAME outside the contracts is the creators' stake reward `AUTHORS` has claimed: until the first round, only `AUTHORS` or a holder it paid can add liquidity to the pair ahead of the funders (`derived`).
 
 ## 8. Parameters
 
@@ -294,11 +299,11 @@ After `Closed` the deployment contract holds none of the launch's value and is i
 
 ### 8.2 Values fixed before publication
 
-Every value in this table must be final before the deployment contract is published. No value is supplied by the activation sender or changed after publication. `AIRDROP` is distinct from every other excluded or DEX infrastructure address.
+Every value in this table must be final before the deployment contract is published: the publisher passes it to the constructor and nothing changes it afterwards. `AIRDROP` is distinct from every other excluded or DEX infrastructure address.
 
 | Parameter | Meaning | Requirement |
 |---|---|---|
-| `AUTHORS` | Ordinary address that receives the creators' stake | Non-zero; not in the staking contract's `excluded` set; must be an EOA or a smart wallet able to call the staking contract |
+| `AUTHORS` | Address that receives the creators' stake and may abort the funding | Non-zero; not in the staking contract's `excluded` set; must be an EOA or a smart wallet able to call the staking contract and the deployment contract's `abort` |
 | `AIRDROP` | Special address for referral-remainder stakes | Non-zero; distinct from `AUTHORS`, the token, pair, staking contract, deployment contract, `DEAD`, factory and WBNB; included in `excluded`; must be an EOA or a smart wallet able to call the staking contract |
 | `POOL_BNB_SUPPLY` | Minimum total BNB in wei of all funding rounds | 16.9 BNB, `16_900_000_000_000_000_000` wei |
 
