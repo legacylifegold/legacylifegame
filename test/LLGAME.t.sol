@@ -45,6 +45,7 @@ contract LLGAMETest is Test {
     uint256 constant TOTAL = 340_000_000_000_000_000_000_000_000_000 * U;
     uint256 constant POOL_BNB_SUPPLY = 10 ether;
     address constant DEAD = 0x000000000000000000000000000000000000dEaD;
+    // PancakeSwap v2 factory and WBNB of the chain this branch is built for: BSC mainnet
     address constant BSC_FACTORY = 0xcA143Ce32Fe78f1f7019d7d551a6402fC5350c73;
     address constant BSC_WBNB = 0xbb4CdB9CBd36B01bD1cBaEBF2De08d9173bc095c;
 
@@ -837,6 +838,12 @@ contract LLGAMETest is Test {
         vm.prank(alice);
         token.transfer(address(staking), 100 * U);
         assertEq(staking.reserve(), r0);
+    }
+
+    // syngate: LEGACY-LIFE-GAME-BSC-NETWORK
+    function test_networkBinding() public view {
+        assertEq(address(dep.FACTORY()), BSC_FACTORY);
+        assertEq(address(dep.WBNB()), BSC_WBNB);
     }
 
     // syngate: LEGACY-LIFE-GAME-BSC-TOKEN
