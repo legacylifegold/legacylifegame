@@ -38,9 +38,9 @@ contract LLGAMEDeployment {
     uint256 private constant POOL_SUPPLY = 10_000e9;
     uint256 private constant AUTHORS_SUPPLY = 500_000e9;
 
-    /// @dev PancakeSwap v2 factory and WBNB on BNB Smart Chain mainnet.
-    IPancakeFactory public constant FACTORY = IPancakeFactory(0xcA143Ce32Fe78f1f7019d7d551a6402fC5350c73);
-    IWBNB public constant WBNB = IWBNB(0xbb4CdB9CBd36B01bD1cBaEBF2De08d9173bc095c);
+    /// @dev PancakeSwap v2 factory and WBNB on BNB Smart Chain testnet (chain 97): the bsc_testnet branch.
+    IPancakeFactory public constant FACTORY = IPancakeFactory(0x6725F303b657a9451d8BA641348b6761A6CC7a17);
+    IWBNB public constant WBNB = IWBNB(0xae13d989daC2f0dEbFf460aC112a837C89BAa7cd);
     address public immutable AUTHORS;
     address public immutable AIRDROP;
     uint256 public immutable POOL_BNB_SUPPLY;

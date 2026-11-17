@@ -45,9 +45,9 @@ contract LLGAMETest is Test {
     uint256 constant TOTAL = 340_000_000_000_000_000_000_000_000_000 * U;
     uint256 constant POOL_BNB_SUPPLY = 10 ether;
     address constant DEAD = 0x000000000000000000000000000000000000dEaD;
-    // PancakeSwap v2 factory and WBNB of the chain this branch is built for: BSC mainnet
-    address constant BSC_FACTORY = 0xcA143Ce32Fe78f1f7019d7d551a6402fC5350c73;
-    address constant BSC_WBNB = 0xbb4CdB9CBd36B01bD1cBaEBF2De08d9173bc095c;
+    // PancakeSwap v2 factory and WBNB of the chain this branch is built for: BSC testnet
+    address constant BSC_FACTORY = 0x6725F303b657a9451d8BA641348b6761A6CC7a17;
+    address constant BSC_WBNB = 0xae13d989daC2f0dEbFf460aC112a837C89BAa7cd;
 
     address publisher = makeAddr("publisher");
     address authors = makeAddr("authors");
