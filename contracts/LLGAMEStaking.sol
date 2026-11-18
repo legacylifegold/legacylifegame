@@ -36,7 +36,7 @@ contract LLGAMEStaking {
 
     address public constant DEAD = 0x000000000000000000000000000000000000dEaD;
     uint256 private constant REFERRAL_PERCENT = 20;
-    uint256 private constant MAX_GAS_PRICE = 1 gwei;     // the gas price a referral gas refund is valued at, at most
+    uint256 private constant MAX_GAS_PRICE = 0.5 gwei;   // the gas price a referral gas refund is valued at, at most
     uint256 private constant REFUND_DIVISOR = 10;        // the gas refund of a stake is at most 1/10 of its referral budget
     uint256 private constant PRICE_PERIOD = 30 minutes;  // the shortest time between two settings of the reference price
     uint256 private constant PRICE_GUARD_PERCENT = 5;    // LLGAME further below its reference price is valued at the reference
