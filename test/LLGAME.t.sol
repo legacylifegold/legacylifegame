@@ -461,8 +461,8 @@ contract LLGAMETest is Test {
         _stake(bob, 1_000 * U, carol);
         assertEq(staking.referrerOf(carol), bob);
 
-        // pool of 10,000 LLGAME and 10 BNB held for a whole price window: at the 5 gwei cap a gas unit is worth
-        // 0.000005 LLGAME, a level about 0.07 LLGAME. Both levels are paid their share less the gas charge,
+        // pool of 10,000 LLGAME and 10 BNB held for a whole price window: at the 0.5 gwei cap a gas unit is worth
+        // 0.0000005 LLGAME, a level about 0.0075 LLGAME. Both levels are paid their share less the gas charge,
         // which goes to carol, the caller.
         skip(31 minutes);
         uint256 a0 = token.balanceOf(alice);
@@ -537,20 +537,20 @@ contract LLGAMETest is Test {
         uint256 t0 = token.balanceOf(top);
         uint256 d0 = token.balanceOf(direct);
         uint256 s0 = token.balanceOf(s);
-        // a stake of 10 LLGAME: shares halve from 1 to 0.0078 LLGAME; at the 5 gwei cap a level's gas is worth
-        // some hundredths of an LLGAME, so it outweighs the top share and the walk ends below it. The refund
-        // stays within a tenth of the 2 LLGAME budget.
+        // a stake of 7 LLGAME: shares halve from 0.7 to 0.0055 LLGAME; at the 0.5 gwei cap a level's gas is
+        // worth some thousandths of an LLGAME, so it outweighs the top share and the walk ends below it. The
+        // refund stays within a tenth of the 1.4 LLGAME budget.
         skip(31 minutes);
         vm.txGasPrice(5 gwei);
-        _stake(s, 10 * U, s);
+        _stake(s, 7 * U, s);
         vm.txGasPrice(0);
-        uint256 refund = token.balanceOf(s) + 10 * U - s0;
+        uint256 refund = token.balanceOf(s) + 7 * U - s0;
         emit log_named_uint("refund, base units", refund);
         assertEq(token.balanceOf(top), t0, "walk ended before the top level");
         assertGt(token.balanceOf(direct), d0);
         assertLt(token.balanceOf(direct) - d0, 1 * U);
         assertGt(refund, 0, "caller refunded");
-        assertLe(refund, 2 * U / 10, "refund within a tenth of the budget");
+        assertLe(refund, 14 * U / 100, "refund within a tenth of the budget");
         _assertSolvent();
     }
 
