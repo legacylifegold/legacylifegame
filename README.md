@@ -6,11 +6,11 @@ See the [white paper](docs/WHITEPAPER.md) for the ecosystem design.
 
 ## Build and test
 
-Requires [Foundry](https://book.getfoundry.sh/).
+Requires [Foundry](https://book.getfoundry.sh/). The repository has no git submodules: OpenZeppelin Contracts and forge-std are pinned in `foundry.toml` and installed by Soldeer into `dependencies/`, each archive checked against `soldeer.lock`.
 
 ```sh
-git submodule update --init --recursive
+forge soldeer install
 forge test
 ```
 
-The tests deploy the PancakeSwap v2 core (`lib/pancake-swap-core`, Solidity 0.5.16) alongside the contracts.
+The tests deploy the PancakeSwap v2 core (vendored in `test/pancake-core`, Solidity 0.5.16) alongside the contracts.
