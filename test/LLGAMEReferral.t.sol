@@ -181,4 +181,153 @@ contract LLGAMEReferralTest is Test {
         assertEq(query.referrerOf(stranger), address(0));
         assertEq(query.referrerOf(referrer), address(0), "the root has none");
     }
+
+    // ------------------------------------------------------------------ root lookup
+
+    function _bindIn(LLGAMEReferral where, uint256 key, address account, address to) private {
+        where.bind(account, to, SITE, NONCE, ISSUED_AT, _sign(key, account, to));
+    }
+
+    /// @dev The chain `tag0 <- tag1 <- ... <- tag<depth>` in `referral`, `tag0` its root, each bound to the one before.
+    function _chain(string memory tag, uint256 depth) private returns (address[] memory a, uint256[] memory k) {
+        a = new address[](depth + 1);
+        k = new uint256[](depth + 1);
+        for (uint256 i; i <= depth; ++i) {
+            (a[i], k[i]) = makeAddrAndKey(string.concat(tag, vm.toString(i)));
+            if (i > 0) _bindIn(referral, k[i], a[i], a[i - 1]);
+        }
+    }
+
+    /// @dev Binds under `to` a new account that already has a referee, so its binding looks up the root of `to`.
+    function _bindWithReferee(string memory tag, address to) private {
+        (address x, uint256 xKey) = makeAddrAndKey(tag);
+        (address y, uint256 yKey) = makeAddrAndKey(string.concat(tag, "-referee"));
+        _bindIn(referral, yKey, y, x);
+        _bindIn(referral, xKey, x, to);
+    }
+
+    function _assertRoot(address account, address root, uint256 depth, uint256 hops) private view {
+        (address r, uint256 d, uint256 h) = ILLGAMEReferral(referral).findRoot(account);
+        assertEq(r, root, "root");
+        assertEq(d, depth, "depth");
+        assertEq(h, hops, "hops");
+    }
+
+    /// @dev The gas of the call itself, the caller's own frame left out.
+    function _gasOf(address target, bytes memory data) private returns (uint256 used) {
+        (bool ok,) = target.call(data);
+        used = vm.lastCallGas().gasTotalUsed;
+        assertTrue(ok, "bound");
+    }
+
+    // syngate: LEGACYLIFE-BSC-REFERRAL-BIND-GAS
+    function test_bindingGasDepthFree() public {
+        LLGAMEReferral shallow = new LLGAMEReferral();
+        (address ref, uint256 refKey) = makeAddrAndKey("ref");
+        (address newbie, uint256 newbieKey) = makeAddrAndKey("newbie");
+
+        // the same referrer at depth 1 in one contract and at depth 30 in the other
+        (address[] memory chain,) = _chain("deep", 29);
+        _bindIn(shallow, refKey, ref, chain[0]);
+        _bindIn(referral, refKey, ref, chain[29]);
+        assertEq(_depth(shallow, ref), 1);
+        assertEq(_depth(referral, ref), 30);
+
+        // an account with no referee bound under it: the same call costs the same gas in both
+        bytes memory data = abi.encodeCall(
+            LLGAMEReferral.bind, (newbie, ref, SITE, NONCE, ISSUED_AT, _sign(newbieKey, newbie, ref))
+        );
+        uint256 low = _gasOf(address(shallow), data);
+        uint256 high = _gasOf(address(referral), data);
+        assertEq(high, low, "binding gas independent of the referrer's depth");
+        assertEq(shallow.referrerOf(newbie), ref);
+        assertEq(referral.referrerOf(newbie), ref);
+    }
+
+    function _depth(LLGAMEReferral where, address account) private view returns (uint256 depth) {
+        (, depth,) = where.findRoot(account);
+    }
+
+    // syngate: LEGACYLIFE-BSC-REFERRAL-LAST-ROOT
+    function test_lastRoot() public {
+        assertEq(referral.SAVE_ROOT_AFTER_HOPS(), 8);
+        (address[] memory a, uint256[] memory k) = _chain("a", 9);
+        _assertRoot(a[8], a[0], 8, 8);
+        _assertRoot(a[9], a[0], 9, 9);
+
+        // a search of SAVE_ROOT_AFTER_HOPS hops saves nothing
+        _bindWithReferee("x", a[8]);
+        _assertRoot(a[8], a[0], 8, 8);
+
+        // a longer search saves the root with its steps for the account it started from, and for it alone
+        _bindWithReferee("z", a[9]);
+        _assertRoot(a[9], a[0], 9, 1);
+        _assertRoot(a[8], a[0], 8, 8);
+        _assertRoot(a[5], a[0], 5, 5);
+
+        // the root bound in turn: the saved root turns stale, its steps stay exact, the search goes on from it
+        address w = makeAddr("w");
+        _bindIn(referral, k[0], a[0], w);
+        _assertRoot(a[9], w, 10, 2);
+        _assertRoot(a[8], w, 9, 9);
+    }
+
+    // syngate: LEGACYLIFE-BSC-REFERRAL-SHORTEN-SEARCH
+    function test_shortenRootSearch() public {
+        (address[] memory a,) = _chain("r", 20);
+        _assertRoot(a[20], a[0], 20, 20);
+
+        // any caller, at most the hops named: five referrers, then the last root and four more
+        vm.prank(other);
+        referral.shortenRootSearch(a[20], 5);
+        _assertRoot(a[20], a[0], 20, 16);
+        vm.prank(other);
+        referral.shortenRootSearch(a[20], 5);
+        _assertRoot(a[20], a[0], 20, 12);
+
+        // never past the root
+        referral.shortenRootSearch(a[20], 100);
+        _assertRoot(a[20], a[0], 20, 1);
+        referral.shortenRootSearch(a[0], 100);
+        _assertRoot(a[0], a[0], 0, 0);
+
+        // a last root that would not move is not written: no hop, one hop, or the root already saved
+        vm.record();
+        referral.shortenRootSearch(a[5], 0);
+        referral.shortenRootSearch(a[5], 1);
+        referral.shortenRootSearch(a[20], 100);
+        (, bytes32[] memory writes) = vm.accesses(address(referral));
+        assertEq(writes.length, 0, "nothing written");
+        _assertRoot(a[5], a[0], 5, 5);
+
+        // a chain too deep for one search shortened over several calls of a few hops each
+        (, , uint256 hops) = referral.findRoot(a[19]);
+        uint256 calls;
+        while (hops > 1) {
+            referral.shortenRootSearch(a[19], 3);
+            (, , uint256 now_) = referral.findRoot(a[19]);
+            assertLt(now_, hops, "each call shortens the search");
+            hops = now_;
+            ++calls;
+        }
+        assertGt(calls, 1);
+        _assertRoot(a[19], a[0], 19, 1);
+    }
+
+    // syngate: LEGACYLIFE-BSC-REFERRAL-FIND-ROOT
+    function test_findRoot() public {
+        // a root answers itself, an account never bound included
+        address stranger = makeAddr("stranger");
+        _assertRoot(stranger, stranger, 0, 0);
+
+        (address[] memory a,) = _chain("p", 3);
+        for (uint256 i; i <= 3; ++i) {
+            _assertRoot(a[i], a[0], i, i);
+        }
+
+        // the depth counts the bindings, the hops what a root search takes now
+        referral.shortenRootSearch(a[3], 3);
+        _assertRoot(a[3], a[0], 3, 1);
+        _assertRoot(a[2], a[0], 2, 2);
+    }
 }

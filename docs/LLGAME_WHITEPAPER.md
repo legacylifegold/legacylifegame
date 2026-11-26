@@ -22,7 +22,7 @@ Legacy Life game (LLGAME) is the BEP-20 token on BNB Smart Chain (BSC). Its whol
 
 The supply is allocated as follows:
 
-- `AUTHORS_SUPPLY = 500,000` LLGAME - creators' stake, locked for 1080 days: an ordinary stake opened for the fixed `AUTHORS` address when the staking contract is set;
+- `AUTHORS_SUPPLY = 200,000` LLGAME - creators' stake, locked for 1080 days: an ordinary stake opened for the fixed `AUTHORS` address when the staking contract is set;
 - up to `POOL_SUPPLY_CAP = 1,000,000` LLGAME paired with BNB in a launch liquidity pool, in the amounts `AUTHORS` sets during funding, whose liquidity provider (LP) tokens are sent to `DEAD` when funding closes;
 - the remaining supply, with the pool's unused part at close, is held by the staking contract. After the creators' stake is opened, the unallocated part becomes the reserve that funds subsequent staking rewards and referral allocations.
 
@@ -30,7 +30,7 @@ Holders receive value through:
 
 - staking for 1080 days, with rewards accruing over time and claimable as they accrue;
 - the referral program: a referral budget and a premium budget of each stake, paid inside the stake call to the staker's uplines;
-- gamified airdrops: any non-zero unpaid remainder of those budgets is recorded immediately as a stake for the special `AIRDROP` address, making the accumulated airdrop budget transparent and predictable on chain;
+- gamified airdrops: any non-zero unpaid remainder of those budgets is transferred in the same call to the special `AIRDROP` address as liquid LLGAME, so the accumulated airdrop budget is visible on chain as its balance;
 
 The operational ecosystem consists of the token, a staking contract, a referral contract and a DEX pair, brought together by a separate deployment contract. Two separately controlled addresses participate in its economics: `AUTHORS`, the ordinary beneficiary of the creators' stake, and `AIRDROP`, the special address for accumulated referral remainders.:
 
@@ -38,11 +38,11 @@ The operational ecosystem consists of the token, a staking contract, a referral 
 |---|---|---|
 | Token (`LLGAME`) | OpenZeppelin v5 `ERC20`, `ERC20Burnable`, `ERC20Permit`, 9 decimals, no access control module, no transfer hook and no reference to another contract of the ecosystem | None: locked at publication |
 | Pool | PancakeSwap v2 LLGAME/WBNB pair, launch LP position sent to `DEAD` at close | None: the pair is DEX code, its protocol `feeTo` share excepted |
-| Staking | Holds the reserve and the ecosystem-account set; submits a beneficiary's signed referral binding to the referral contract; takes stakes paid by their caller for a beneficiary, splits a part of a stake to a delegate, or hands it the whole stake, at its staker's request, allocates rewards, pays referral shares and premium awards to eligible uplines, records any non-zero unpaid remainder of their budgets as an `AIRDROP` stake inside the stake call | None: locked at launch |
+| Staking | Holds the reserve and the ecosystem-account set; submits a beneficiary's signed referral binding to the referral contract; takes stakes paid by their caller for a beneficiary, splits a part of a stake to a delegate, or hands it the whole stake, at its staker's request, allocates rewards, pays referral shares and premium awards to eligible uplines, transfers any non-zero unpaid remainder of their budgets to `AIRDROP` inside the stake call | None: locked at launch |
 | Referral | Standalone record of who referred whom, written on each account's own signature; references no token and no staking contract | None: locked at publication |
 | Deployment contract | Takes the whole supply of the published token, funds the staking contract `AUTHORS` names and opens the creators' stake there, builds the pool from the amounts `AUTHORS` sets and closes at `AUTHORS`' call | Every call `AUTHORS`' alone; no right of its publisher, no upgrade path, no return of LLGAME to `AUTHORS` |
 | `AUTHORS` address | Fixed beneficiary of the creators' stake and the one account able to call the deployment contract; to the token and the staking contract an ordinary account with no exclusion or privilege | Its key or multisig policy controls that account and every call of the deployment contract until close; it has no right over a locked contract |
-| `AIRDROP` address | Special address whose stakes accumulate the unpaid remainders of the referral and premium budgets for later airdrops; cannot participate in the referral program as referrer or referred account | Its key or multisig policy claims and withdraws under the common staking rules |
+| `AIRDROP` address | Special address receiving the unpaid remainders of the referral and premium budgets as liquid LLGAME for later airdrops; cannot participate in the referral program as referrer or referred account | Its key or multisig policy spends what it receives, and stakes, claims and withdraws under the common staking rules |
 
 ### 1.1 Terms
 
@@ -53,8 +53,8 @@ The operational ecosystem consists of the token, a staking contract, a referral 
 | Staker | The beneficiary of a stake: the account whose active stake it is, whose reward ledger it feeds, to which the principal returns and whose uplines the stake's referral walk pays |
 | Payer | The caller of `stake`, whose LLGAME funds the stake; the staker itself in the common case |
 | Stake reserve | LLGAME in the staking contract not allocated to any stake |
-| Referral budget | 20% of each ordinary stake's amount, taken from the stake reserve at stake time and paid recursively to eligible uplines by the halving share formula; any non-zero unpaid remainder is recorded as an `AIRDROP` stake |
-| Premium budget | 10% of each ordinary stake's amount, taken from the stake reserve at stake time and paid to the uplines whose active stake meets a tier of the premium table (section 6); its unpaid remainder joins the referral budget's in the one `AIRDROP` stake |
+| Referral budget | 20% of each ordinary stake's amount, taken from the stake reserve at stake time and paid recursively to eligible uplines by the halving share formula; any non-zero unpaid remainder is transferred to `AIRDROP` |
+| Premium budget | 10% of each ordinary stake's amount, taken from the stake reserve at stake time and paid to the uplines whose active stake meets a tier of the premium table (section 6); its unpaid remainder joins the referral budget's in the one transfer to `AIRDROP` |
 | Operator | The party running the game; it cannot change the locked contracts or their payout rules |
 | Deployment contract | A launcher bound at publication to the token and to `AUTHORS`, whose calls alone it takes: it pulls the supply, sets the staking contract, supplies the pool and closes (section 7) |
 | Funding | From the setting of the staking contract until close or abort (section 7) |
@@ -66,10 +66,10 @@ Every part of the ecosystem is bound by the following; the requirements of secti
 
 1. **Locked at launch.** The token and the staking contract are locked contracts. No proxy, upgradeable part or contract-administration signer exists in the token or staking contracts; the deployment contract's calls are `AUTHORS`' alone and end at close, and the staking contract is the one `AUTHORS` names there, once.
 2. **No mint after creation.** The token's constructor mints the whole supply and no function can mint again. Every staking reward and referral allocation is funded from the staking contract's pre-minted holdings.
-3. **No administration of value.** No key can move LLGAME out of a locked contract except through its fixed rules: staking principal withdrawal, reward claim, and referral payout. From close, the launch LP position is irretrievably held at `DEAD`; during funding only an abort removes its liquidity, returning its BNB to `AUTHORS`; PancakeSwap may separately mint protocol-fee LP shares to its configured `feeTo` address under the DEX's own rules, as described in section 4. `AIRDROP` claims and withdraws under the common rules and has no administrative right over any contract.
+3. **No administration of value.** No key can move LLGAME out of a locked contract except through its fixed rules: staking principal withdrawal, reward claim, referral payout and the transfer of the referral remainder to `AIRDROP`. From close, the launch LP position is irretrievably held at `DEAD`; during funding only an abort removes its liquidity, returning its BNB to `AUTHORS`; PancakeSwap may separately mint protocol-fee LP shares to its configured `feeTo` address under the DEX's own rules, as described in section 4. `AIRDROP` claims and withdraws under the common rules and has no administrative right over any contract.
 4. **Fixed conditions.** The staking term and rate, the referral and premium budgets, the referral formula and the premium table, the fixed `AUTHORS` beneficiary, the `AIRDROP` address and the fixed ecosystem-account exclusion set are immutable or constants of the contracts that use them.
-5. **Solvent by construction.** Nothing is owed beyond what is allocated: a stake reverts when the stake reserve cannot cover its reward, its referral and premium budgets and the reward of its `AIRDROP` stake; the referral walk pays eligible shares within the stake's referral budget and premium awards within its premium budget in the same call, and any unpaid part of both is recorded as one `AIRDROP` stake. The sum of the staking contract's accounted ledgers—principal still held, allocated rewards not yet claimed and unallocated reserve—never exceeds its LLGAME balance. A direct token transfer to the staking contract outside `stake` and `fund` is an unsolicited donation: it is not credited to the reserve or any stake ledger and has no withdrawal path.
-6. **Deterministic binding and payouts.** A referral binding is written only on the account's own signature over its referrer, once, and never where it would close a cycle; a plain token transfer binds nothing. Referral shares are paid to uplines whose liquid balance and `activeStakeOf` both meet the level's fixed threshold, down to the level at which the walk ends, and premium awards to uplines whose `activeStakeOf` meets a tier of the fixed premium table (section 6). No off-chain party can alter the binding, the shares, the awards or the thresholds, and the staker cannot either through its stake transaction: the walk reads neither its gas, its gas price nor the pool's price, and a transaction short of gas for it reverts whole. Distribution of matured funds withdrawn by `AIRDROP` is an off-chain activity and is not controlled by the contracts.
+5. **Solvent by construction.** Nothing is owed beyond what is allocated: a stake reverts when the stake reserve cannot cover its reward and its referral and premium budgets; the referral walk pays eligible shares within the stake's referral budget and premium awards within its premium budget in the same call, and any unpaid part of both is transferred to `AIRDROP` in that call, so no part of the budgets stays owed. The sum of the staking contract's accounted ledgers—principal still held, allocated rewards not yet claimed and unallocated reserve—never exceeds its LLGAME balance. A direct token transfer to the staking contract outside `stake` and `fund` is an unsolicited donation: it is not credited to the reserve or any stake ledger and has no withdrawal path.
+6. **Deterministic binding and payouts.** A referral binding is written only on the account's own signature over its referrer, once, and never where it would close a cycle; a plain token transfer binds nothing. Referral shares are paid to uplines whose liquid balance and `activeStakeOf` both meet the level's fixed threshold, down to the level at which the walk ends, and premium awards to uplines whose `activeStakeOf` meets a tier of the fixed premium table (section 6). No off-chain party can alter the binding, the shares, the awards or the thresholds, and the staker cannot either through its stake transaction: the walk reads neither its gas, its gas price nor the pool's price, and a transaction short of gas for it reverts whole. Distribution of the LLGAME `AIRDROP` receives is an off-chain activity and is not controlled by the contracts.
 7. **No transfer tax.** The token overrides no transfer logic: an ordinary transfer deducts no fee, redirects no part and calls no other contract.
 
 ## 3. Token
@@ -90,7 +90,7 @@ The token adds nothing to the OpenZeppelin `ERC20`, `ERC20Burnable` and `ERC20Pe
 The launch pool is the canonical PancakeSwap v2 LLGAME/WBNB pair. At close it holds:
 
 - The LLGAME, at most `POOL_SUPPLY_CAP`, and the BNB as WBNB that `AUTHORS` supplied (section 7.2). Their ratio is the launch price, which `AUTHORS` sets and corrects for the BNB rate until the close.
-- `POOL_SUPPLY_CAP` is one part in 3.4 × 10^23 of the total supply. The pool is the initial DEX source of freely tradable LLGAME; the creators' principal is locked in staking, while reserve distributions occur only through the staking rules. Tokens subsequently circulate through ordinary transfers, staking payouts, referral payouts and any off-chain airdrops funded by matured `AIRDROP` withdrawals.
+- `POOL_SUPPLY_CAP` is one part in 3.4 × 10^23 of the total supply. The pool is the initial DEX source of freely tradable LLGAME; the creators' principal is locked in staking, while reserve distributions occur only through the staking rules. Tokens subsequently circulate through ordinary transfers, staking payouts, referral payouts and any off-chain airdrops funded by the remainders `AIRDROP` receives.
 - The launch LP tokens are held at the dead address, so that position is locked without a locker contract or owner. Swap fees remain in the pair's reserves; the PancakeSwap protocol may separately mint `feeTo` LP shares under its own factory-controlled fee mechanism.
 
 ## 5. Staking
@@ -99,13 +99,13 @@ A holder stakes an amount `A` for the fixed term of 1080 days, with `stake(amoun
 
 Every public `stake` or `stakeWithPermit` call must meet the minimum principal of **72,000,000 base units**, 0.072 LLGAME.
 
-This limit targets an average accrued reward of at least one base unit per average BSC block, using the documented 0.45-second average block interval. It is a count of base units, the same for every token whatever its decimals. The minimum applies to public stake calls; the internally created referral-remainder `AIRDROP` stake described in section 5.2 is exempt.
+This limit targets an average accrued reward of at least one base unit per average BSC block, using the documented 0.45-second average block interval. It is a count of base units, the same for every token whatever its decimals.
 
 | Allocation at stake time | Amount | Destination |
 |---|---|---|
 | Reward | 288% of `A`, that is 8% of `A` per 30 days | The staker's reward ledger, released linearly over the term |
-| Referral budget | 20% of `A` (section 6) | Allocated from the stake reserve; eligible shares are paid immediately and the remainder becomes an `AIRDROP` stake (section 6) |
-| Premium budget | 10% of `A` (section 6) | Allocated from the stake reserve; awards are paid immediately to the uplines on a premium tier and the remainder joins the referral remainder in the `AIRDROP` stake (section 6) |
+| Referral budget | 20% of `A` (section 6) | Allocated from the stake reserve; eligible shares are paid immediately and the remainder is transferred to `AIRDROP` (section 6) |
+| Premium budget | 10% of `A` (section 6) | Allocated from the stake reserve; awards are paid immediately to the uplines on a premium tier and the remainder joins the referral remainder in the transfer to `AIRDROP` (section 6) |
 
 The reward accrues linearly from the stake block to the unlock, and the staker claims the accrued part at any time, capped by the allocated reward; the ledger keeps the claimed amount, so a fully claimed stake reads and claims cleanly. The principal is returned to the staker, with the unclaimed reward, at the end of the term, once. There is no early withdrawal and no compounding: a holder that wants to restake takes its payout and stakes again, which triggers new referral and premium budgets. The contract keeps `activeStakeOf[account]`, the sum of the account's stake principals still held by the staking contract, including matured stakes whose principal has not yet been withdrawn. It enters the upline's payout eligibility and sets its premium tier (section 6). It is incremented when a stake opens and decremented exactly once when that stake's principal is withdrawn. No separate staker flag or registration state is needed.
 
@@ -122,9 +122,15 @@ struct StakeInfo {
     uint64  start;      // timestamp of the stake block; the reward accrues from it to start + 1080 days
 }
 
-event Staked(uint256 indexed stakeId, address indexed staker, address indexed payer, uint256 amount);
-    // also for an AIRDROP remainder stake: staker AIRDROP, payer the staking contract
-event StakeDelegated(uint256 indexed stakeId, uint256 indexed delegatedStakeId, address indexed delegate, address staker, uint256 amount);
+// the events, written in full: each is indexed by its token and the accounts it concerns
+event Initialized(address indexed token, address indexed airdrop, address indexed pair, address deployment,
+                  uint256 reserve);   // the first reserve as received
+event Staked(address indexed token, address indexed staker, address indexed payer, uint256 stakeId, uint256 amount);
+event StakeDelegated(address indexed token, address indexed delegate, address indexed staker,
+                     uint256 stakeId, uint256 delegatedStakeId, uint256 amount);   // staker: the delegating one
+event Withdrawn(address indexed token, address indexed staker, uint256 stakeId, uint256 principal, uint256 reward);
+event ReferralPaid(address indexed token, address indexed upline, address indexed staker,
+                   uint256 stakeId, uint256 level, uint256 share, uint256 award);   // section 6
 
 constructor(address referral, address wbnb);
 
@@ -157,7 +163,7 @@ function activeStakeOf(address account) external view returns (uint256);
 function reserve() external view returns (uint256);                    // the unallocated stake reserve
 ```
 
-`stakeWithPermit` signs the payer's approval with `ERC20Permit` and does what `stake` does in one transaction. `stakeWithPermitAndReferral` does the same for `stakeWithReferral`, so an invited account's first stake, approval and binding included, is one transaction; a permit that fails, submitted ahead by someone else, leaves the allowance to decide and does not fail the stake by itself. Only the staker claims and withdraws: the payer has no right over the stake once it is open. Its staker may delegate all or part of it (section 5.3). `claim` and `withdraw` emit no event of their own: the token's `Transfer` from the staking contract records the amount paid, and `stakeInfo` the state of the stake. The referral forest is read from the referral contract (section 6).
+`stakeWithPermit` signs the payer's approval with `ERC20Permit` and does what `stake` does in one transaction. `stakeWithPermitAndReferral` does the same for `stakeWithReferral`, so an invited account's first stake, approval and binding included, is one transaction; a permit that fails, submitted ahead by someone else, leaves the allowance to decide and does not fail the stake by itself. Only the staker claims and withdraws: the payer has no right over the stake once it is open. Its staker may delegate all or part of it (section 5.3). Every event is indexed by its token and the accounts it concerns, so the logs of one ledger are found by token and by account; stake ids and amounts are their data. `Initialized` names, beside the token, `AIRDROP`, the pair and the deployment contract, the first reserve as received. `Staked` is indexed by staker and payer, `StakeDelegated` by the delegate and the delegating staker. `Withdrawn`, indexed by staker, names the stake, the principal returned and the unclaimed reward paid with it, the two summing to the transfer made. `ReferralPaid` records each upline's payout (section 6). `claim` and the remainder's transfer to `AIRDROP` emit no event of their own: the token's `Transfer` from the staking contract records the amount paid, and `stakeInfo` the state of the stake. The referral forest is read from the referral contract (section 6).
 
 ### 5.2 Stake procedure
 
@@ -167,9 +173,9 @@ function reserve() external view returns (uint256);                    // the un
 2. Pull `amount` from the payer: `transferFrom(msg.sender, staking, amount)`, reverting on a refused or failed transfer. The principal is what the contract's balance of the token grew by, and it must also meet the minimum principal. Every later step is computed on it.
 3. Allocate the reward, the referral budget and the premium budget from the stake reserve; revert when the reserve is short.
 4. Write the ordinary stake under the beneficiary: `stakeId`, the principal, the stake block and the allocated reward; add the principal to `activeStakeOf[beneficiary]`.
-5. When the call carries a referrer and the beneficiary's signature, submit them to the referral contract (section 6); a refused binding changes nothing and does not fail the stake.
-6. Walk the beneficiary's uplines recursively, pay each eligible upline its level share and each upline on a premium tier its award (section 6), then, if the unpaid part of the two budgets is non-zero, record it immediately as one `AIRDROP` stake (section 6), allocating its ordinary reward from the stake reserve; revert when the reserve is short.
-7. Emit `Staked` with the ordinary staker and payer. If an `AIRDROP` stake is recorded by this call, emit `Staked` for it as well, with its stake ID, `AIRDROP` as the staker, the staking contract as the payer, and the amount. This records an internal reserve allocation, not a second payer transfer, and it follows the originating stake's `Staked` in the same transaction.
+5. When the call carries a referrer and the beneficiary's signature, submit them to the referral contract (section 6); a refused binding changes nothing and does not fail the stake. A submission that ran out of gas is no refusal: the stake reverts when the submission left less than a 63rd of the gas at hand before it, the most a call that spent all it was given leaves, so no stake opens unbound for want of gas.
+6. Walk the beneficiary's uplines recursively, pay each eligible upline its level share and each upline on a premium tier its award (section 6), then, if the unpaid part of the two budgets is non-zero, transfer it to `AIRDROP` (section 6).
+7. Emit `Staked` with the staker and payer.
 
 ### 5.3 Stake delegation
 
@@ -180,11 +186,11 @@ function reserve() external view returns (uint256);                    // the un
 3. If `amount < principal`, write a new ordinary stake under the delegate with principal `amount`, the original stake block, reward allocation `floor(reward × amount / principal)` and claimed amount `floor(claimed × amount / principal)`; the original stake keeps the remainders of principal, reward and claimed amount. If `amount = principal`, make the delegate the staker of the stake itself, which keeps its `stakeId`, principal, reward and claimed amount, and open no new stake: `delegatedStakeId` is then `stakeId`. Either way, move `amount` from `activeStakeOf[caller]` to `activeStakeOf[delegate]`.
 4. Emit `StakeDelegated`; for a full delegation its two stake IDs are equal.
 
-Delegation moves no LLGAME and touches no reserve: no reward, referral budget or premium budget is allocated, no referral walk runs and no `AIRDROP` stake is recorded. Both parts keep the original unlock date. A full delegation leaves no empty record behind under the caller, so a stake ID always names a stake with a staker able to claim it (`derived`). The delegated stake is ordinary in every other respect: only the delegate claims and withdraws it, and the delegate may delegate a part of it again. The delegated principal counts toward the delegate's level thresholds and premium tier and no longer toward the caller's (`derived`).
+Delegation moves no LLGAME and touches no reserve: no reward, referral budget or premium budget is allocated, no referral walk runs and nothing is transferred to `AIRDROP`. Both parts keep the original unlock date. A full delegation leaves no empty record behind under the caller, so a stake ID always names a stake with a staker able to claim it (`derived`). The delegated stake is ordinary in every other respect: only the delegate claims and withdraws it, and the delegate may delegate a part of it again. The delegated principal counts toward the delegate's level thresholds and premium tier and no longer toward the caller's (`derived`).
 
 ## 6. Referral program
 
-The referral program is funded inside the stake call from two budgets taken from the stake reserve: the referral budget, 20% of the stake amount `A`, paid as level shares, and the premium budget, 10% of `A`, paid as premium awards. An LLGAME transfer runs no recipient code, so an upline cannot revert a stake or reenter the contract through token receipt; for a token that does run code on a transfer, every call of the staking contract that moves tokens is closed to reentry. The principal is pulled before the ordinary stake and its reserve allocation are recorded, and the walk runs after both (section 5.2); the `AIRDROP` stake is recorded once the shares and awards have been determined.
+The referral program is funded inside the stake call from two budgets taken from the stake reserve: the referral budget, 20% of the stake amount `A`, paid as level shares, and the premium budget, 10% of `A`, paid as premium awards. An LLGAME transfer runs no recipient code, so an upline cannot revert a stake or reenter the contract through token receipt; for a token that does run code on a transfer, every call of the staking contract that moves tokens is closed to reentry. The principal is pulled before the ordinary stake and its reserve allocation are recorded, and the walk runs after both (section 5.2); the remainder is transferred to `AIRDROP` once the shares and awards have been paid.
 
 The referral bindings are kept by the referral contract, a standalone locked contract that references no token and no staking contract: it stores for an account the referrer that account has signed for, and answers queries.
 
@@ -195,6 +201,8 @@ event ReferralBound(address indexed account, address indexed referrer);
 function bind(address account, address referrer, string calldata site, string calldata nonce,
               string calldata issuedAt, bytes calldata signature) external;            // any caller
 function referrerOf(address account) external view returns (address);                  // zero while unbound
+function shortenRootSearch(address account, uint256 maxHops) external;                             // any caller
+function findRoot(address account) external view returns (address root, uint256 depth, uint256 hops);
 ```
 
 A binding is the account's signature over its agreement to the referrer: an EIP-4361 message, signed as an EIP-191 personal message on the site of the game's dApp:
@@ -218,7 +226,13 @@ The site is the `https` origin the account signed on and the host is that origin
 
 The signature is collected off chain: the game's dApp, opened by a referral link naming the referrer, asks the account to sign and keeps the first signature it is given. Whoever opens a stake for the account, the account itself or another payer, may pass the referrer and the signature, with the site, nonce and time it was signed with, along with the stake: the staking contract submits them to the referral contract before the walk, and a missing or refused signature leaves the account as it was without failing the stake. An unbound account stays bindable, by a later stake or by `bind` directly. Who pays a stake binds nothing, nor does a token transfer.
 
-The staking contract reads `referrerOf` for the walk and applies its own exclusions to what it reads: `AIRDROP` and the other ecosystem accounts are never paid a referral share or a premium award and their stakes run no walk, whatever the referral contract holds for them. The bindings form a forest: `bind` walks from the referrer up its chain of referrers to the root and refuses the binding when it meets the account, so no binding closes a cycle. The walk is paid by whoever submits the binding and grows with the depth of the referrer's chain; an account that already has referees stays bindable to any account not below it.
+The staking contract reads `referrerOf` for the walk and applies its own exclusions to what it reads: `AIRDROP` and the other ecosystem accounts are never paid a referral share or a premium award and their stakes run no walk, whatever the referral contract holds for them. The bindings form a forest, and a binding could close a cycle only where the account already has referees, its referrer then possibly below it. `bind` therefore checks nothing more for an account with no referee, whose binding costs the same gas whatever the depth of its referrer's chain. For an account with referees it looks up the referrer's root and refuses the binding when that root is the account itself, the account, still unbound, being the root of everything below it; an account that already has referees stays bindable to any account not below it.
+
+The root search follows last roots. An account's last root is the root a search found above it, saved with the steps to it, the number of bindings between the two. Bindings being final, a saved last root stays the account's ancestor at exactly those steps; it only stops being a root once it is bound in its turn, and the search goes on from it over its own last root or, where an account has none saved, over its referrer, each a hop. A search that took more than `SAVE_ROOT_AFTER_HOPS = 8` hops saves the root found, with the summed steps, as the last root of the account it started from, so the next search from there takes one hop; a shorter search writes nothing, and a shallow network pays for no saved root. The hops of a search therefore follow the number of roots bound since the last roots were saved, not the depth of the chain.
+
+`shortenRootSearch(account, maxHops)`, open to any caller, climbs at most `maxHops` hops from the account, never past its root, and saves the ancestor reached, with its steps, as the account's last root where the climb went beyond its first hop. It is the maintenance call for a chain whose root search no longer fits one transaction: such a chain is advanced over several transactions, so no account stays unbindable for the depth of what is below it. No stake and no page of the dApp needs it otherwise.
+
+`findRoot(account)` answers the account's root, its depth, the number of bindings between it and that root, and the hops a root search from it takes now; a root answers itself, zero and zero. The depth, up to `MAX_LEVELS`, prices the referral walk of the account's stake, and the hops price the root search of a binding to that account.
 
 For a stake of amount `A`, the staking contract walks from the staker's direct upline upward. An upline is eligible for its level share when both its liquid balance and its `activeStakeOf` separately meet the level's threshold. The halving share schedule keeps the total payout within the 20% budget, while the doubling requirement limits eligibility at each successive level. At level `n` (starting at 1):
 
@@ -243,7 +257,7 @@ Beside its level share, an upline is due a premium award by its `activeStakeOf` 
 | 500,000 | 9% |
 | 1,000,000 | 10% |
 
-An upline whose tier names `p` percent is paid `floor(A × (p − q) / 100)`, `q` being the highest percent already paid to an upline nearer to the staker, zero until the first award. An upline whose tier does not exceed `q`, or whose active stake is below the first tier, is paid no award, and the walk goes on. The awards of one stake therefore sum to no more than the percent of the highest tier met along the walk, within the 10% premium budget, and the nearest upline on the top tier takes what is left of it (`derived`). An upline due a level share and an award is paid both in one transfer.
+An upline whose tier names `p` percent is paid `floor(A × (p − q) / 100)`, `q` being the highest percent already paid to an upline nearer to the staker, zero until the first award. An upline whose tier does not exceed `q`, or whose active stake is below the first tier, is paid no award, and the walk goes on. The awards of one stake therefore sum to no more than the percent of the highest tier met along the walk, within the 10% premium budget, and the nearest upline on the top tier takes what is left of it (`derived`). An upline due a level share and an award is paid both in one transfer. Each upline paid is recorded by one `ReferralPaid`, indexed by token, upline and staker and naming the stake, the upline's level, its level share and its award, the two summing to that transfer; an upline passed over is recorded by none, and neither is the remainder's transfer to `AIRDROP`.
 
 For example, #9 stakes 100 LLGAME under this chain, #1 its root and each account referred by the one before:
 
@@ -258,7 +272,7 @@ For example, #9 stakes 100 LLGAME under this chain, #1 its root and each account
 | #2 | 500 | 7 | none: it holds no liquid LLGAME | none | 0 |
 | #1 | 30,000 | 8 | 0.078125 | none: its 5% is within the 8% paid | 0.078125 |
 
-The uplines are paid 19.140625 LLGAME of the 20 LLGAME referral budget and 8 LLGAME of the 10 LLGAME premium budget; the 2.859375 LLGAME left of both become one `AIRDROP` stake.
+The uplines are paid 19.140625 LLGAME of the 20 LLGAME referral budget and 8 LLGAME of the 10 LLGAME premium budget; the 2.859375 LLGAME left of both are transferred to `AIRDROP`.
 
 The walk ends at the first of:
 
@@ -269,7 +283,7 @@ The gas of the walk is the payer's, as of the whole stake transaction, and none 
 
 Eligibility is evaluated after the stake principal has been pulled from the payer and the beneficiary's stake has been recorded; when the payer is the direct upline, the amount just transferred into the new stake does not count as its liquid balance. The threshold applies to the liquid balance and to `activeStakeOf` independently, not to their sum, and does not scale with the stake amount: the liquid balance is what the account can spend now, while `activeStakeOf` includes matured stakes whose principal has not yet been withdrawn and excludes that principal from its `balanceOf`. Both are decremented or spent respectively when principal is withdrawn or liquid funds leave. The sum of the individually rounded shares cannot exceed the rounded 20% referral budget.
 
-The referral budget is `floor(20 × A / 100)` base units and the premium budget `floor(10 × A / 100)`. Each level's share is rounded down in base units and calculated from the original stake amount, not from the previous upline's payout. The eligibility threshold is independent of `A`: an upline whose balance or stake is below `2^(n − 1)` LLGAME is passed over however large the stake. With `m = floor(A / 10)`, when a chain pays every level until the share reaches zero, its shares sum to `2m − popcount(m)`, the number of one bits of `m` subtracted; this is at most `2m − 1` and never exceeds the budget `floor(A / 5) ≥ 2m` (`derived`). A shorter chain, or one cut at level 30, pays less. The remainder is therefore at least one base unit whenever `m > 0`. Whatever the two budgets leave unpaid, when non-zero, is immediately recorded as one `AIRDROP` stake in the same stake call, with the ordinary reward and no budget of its own. If the remainder rounds to zero base units, no `AIRDROP` stake is created. The contract pays no more than `20% × A` in shares and `10% × A` in awards (this holds automatically by the math definition).
+The referral budget is `floor(20 × A / 100)` base units and the premium budget `floor(10 × A / 100)`. Each level's share is rounded down in base units and calculated from the original stake amount, not from the previous upline's payout. The eligibility threshold is independent of `A`: an upline whose balance or stake is below `2^(n − 1)` LLGAME is passed over however large the stake. With `m = floor(A / 10)`, when a chain pays every level until the share reaches zero, its shares sum to `2m − popcount(m)`, the number of one bits of `m` subtracted; this is at most `2m − 1` and never exceeds the budget `floor(A / 5) ≥ 2m` (`derived`). A shorter chain, or one cut at level 30, pays less. The remainder is therefore at least one base unit whenever `m > 0`. Whatever the two budgets leave unpaid, when non-zero, is transferred to `AIRDROP` in the same stake call as liquid LLGAME, opening no stake and allocating no reward; a remainder of zero base units transfers nothing. The contract pays no more than `20% × A` in shares and `10% × A` in awards (this holds automatically by the math definition).
 
 ## 7. Deployment contract
 
@@ -293,7 +307,7 @@ interface ILaunchStaking {
 }
 
 contract Deployment {
-    uint256 private constant AUTHORS_SUPPLY = 500_000 * 10 ** 9;
+    uint256 private constant AUTHORS_SUPPLY = 200_000 * 10 ** 9;
     uint256 private constant POOL_SUPPLY_CAP = 1_000_000 * 10 ** 9;
 
     enum State { NotLaunched, Launched, Funding, Closed, Aborted }
@@ -335,10 +349,10 @@ The contract passes through its states in one order, each step a call of `AUTHOR
 `setStaking(staking_)` names the staking contract, once and irrevocably. The address must hold code, answer `airdropOf(token)` with the zero address, the token not yet initialized there, and hold no LLGAME. The call then:
 - funds it with `TOTAL_SUPPLY − POOL_SUPPLY_CAP − AUTHORS_SUPPLY` through `initialize(token, AIRDROP, pair, amount)`, which fixes there for the token, once and with its reserve, the `AIRDROP` account, the launch pair and, as its caller, the deployment contract;
 - opens the creators' stake with `stake(token, AUTHORS_SUPPLY, AUTHORS)`;
-- verifies `airdropOf(token)` and `pairOf(token)` as passed, `activeStakeOf(AUTHORS) == AUTHORS_SUPPLY`, a staking balance of `TOTAL_SUPPLY − POOL_SUPPLY_CAP` and its own balance of `POOL_SUPPLY_CAP`;
+- verifies `airdropOf(token)` and `pairOf(token)` as passed, `activeStakeOf(AUTHORS) == AUTHORS_SUPPLY`, the balances of the staking contract and of `AIRDROP` together `TOTAL_SUPPLY − POOL_SUPPLY_CAP`, so that the budgets of the creators' stake, unpaid for want of an upline, reached `AIRDROP` and nowhere else, and its own balance of `POOL_SUPPLY_CAP`;
 - enters `Funding`.
 
-These checks prove that the contract answers the interface of section 7.1 and recorded the creators' stake, not how it behaves afterwards: the staking contract is `AUTHORS`' choice, and the invariants of section 2 hold for the ecosystem only as far as the contract named keeps them. The deployment contract knows nothing of a referral contract; whether the staking contract uses one is its own matter. No pool call passes before `setStaking`.
+`AIRDROP` holds no LLGAME before that call, the deployment contract holding the whole supply (`derived`). These checks prove that the contract answers the interface of section 7.1 and recorded the creators' stake, not how it behaves afterwards: the staking contract is `AUTHORS`' choice, and the invariants of section 2 hold for the ecosystem only as far as the contract named keeps them. The deployment contract knows nothing of a referral contract; whether the staking contract uses one is its own matter. No pool call passes before `setStaking`.
 
 `setPoolAmounts(llgame, bnb)` sets the pool's target amounts and moves nothing: `llgame`, at most `POOL_SUPPLY_CAP`, to be paired with `bnb`. Until the first BNB arrives `AUTHORS` changes them freely, the pair holding no liquidity, and so fixes the launch price for the BNB rate of the day; afterwards neither may be set below what the pool was already supplied with.
 
@@ -376,7 +390,7 @@ From `setStaking` on the creators' stake accrues a reward `AUTHORS` can claim, a
 | `DECIMALS` | 9 |
 | `TOTAL_SUPPLY` | 3.4 × 10^29 LLGAME, `3.4 × 10^38` base units, minted once |
 | `POOL_SUPPLY_CAP` | 1,000,000 LLGAME (`1,000,000 × 10^9` base units), the most LLGAME the pool is supplied with |
-| `AUTHORS_SUPPLY` | 500,000 LLGAME (`500,000 × 10^9` base units), predefined and not configurable |
+| `AUTHORS_SUPPLY` | 200,000 LLGAME (`200,000 × 10^9` base units), predefined and not configurable |
 | Creators' stake | `AUTHORS_SUPPLY` staked for 1080 days under the ordinary staking rules: 288% reward allocation, 20% referral budget and 10% premium budget |
 | Referral budget | 20% of each ordinary stake amount |
 | Premium budget | 10% of each ordinary stake amount |
@@ -388,12 +402,12 @@ From `setStaking` on the creators' stake accrues a reward `AUTHORS` can claim, a
 | `MAX_LEVELS` | 30, the highest level of upline a referral walk examines |
 | Referral walk gas | The payer's, as of the whole stake transaction: not measured, not valued in LLGAME and not refunded |
 | Staking term | 1080 days, the only term |
-| Minimum ordinary stake principal | 72,000,000 base units of any token. Applies to public `stake` / `stakeWithPermit` calls and delegated stake portions; internally created `AIRDROP` referral-remainder stakes are exempt |
+| Minimum ordinary stake principal | 72,000,000 base units of any token. Applies to every public stake call and to delegated stake portions |
 | Reward rate | 288% of principal over the term |
 | Reward release | Linear over the stake term, claimable by the staker as it accrues |
 | Pool | PancakeSwap v2 LLGAME/WBNB pair; launch LP position sent to `DEAD` at close |
 | Funding | BNB sent by `AUTHORS`, entering the pool with LLGAME in the proportion of the pool amounts `AUTHORS` set, until `AUTHORS` closes |
-| Unpaid remainder | Whatever the referral and premium budgets leave unpaid, when non-zero, is recorded immediately as one `AIRDROP` stake, with the 1080-day term, the ordinary reward and no budget of its own |
+| Unpaid remainder | Whatever the referral and premium budgets leave unpaid, when non-zero, is transferred to `AIRDROP` in the stake call as liquid LLGAME, opening no stake and allocating no reward |
 
 ### 8.2 Values fixed before publication
 
@@ -402,43 +416,42 @@ Every value in this table must be final before the contract that takes it is pub
 | Parameter | Meaning | Requirement |
 |---|---|---|
 | `AUTHORS` | Address that receives the creators' stake and alone calls the deployment contract | Non-zero; not in the staking contract's `excluded` set; must be an EOA or a smart wallet able to call the staking contract and every call of the deployment contract |
-| `AIRDROP` | Special address for referral-remainder stakes | Non-zero; distinct from `AUTHORS`, the token, pair, staking contract, deployment contract, `DEAD`, factory and WBNB; included in `excluded`; must be an EOA or a smart wallet able to call the staking contract |
+| `AIRDROP` | Special address receiving the referral remainders | Non-zero; distinct from `AUTHORS`, the token, pair, staking contract, deployment contract, `DEAD`, factory and WBNB; included in `excluded`; must be an EOA or a smart wallet able to call the staking contract |
 | Token | Address of the published LLGAME token | Holds the token's code; its whole supply is at one holder, whose permit or approval `AUTHORS` has for the launch |
 
 ## 9. Reserve accounting
 
-The staking reserve is finite and is the source of every staking reward, referral payment and `AIRDROP` stake. The contract allocates the full cost of each stake when that stake is opened. It never promises a reward or referral amount that has not already been reserved. In the formulas below, `floor(x)` denotes integer division with the same rounding used by the staking contract.
+The staking reserve is finite and is the source of every staking reward, referral payment and `AIRDROP` remainder. The contract allocates the full cost of each stake when that stake is opened. It never promises a reward or referral amount that has not already been reserved. In the formulas below, `floor(x)` denotes integer division with the same rounding used by the staking contract.
 
 ### 9.1 Cost of an ordinary stake
 
-For a stake of principal `A`, the principal itself is transferred by the payer and is not taken from the unallocated reserve. The reserve funds the reward allocation, the 20% referral budget, the 10% premium budget and the reward of the `AIRDROP` stake made of their unpaid remainder:
+For a stake of principal `A`, the principal itself is transferred by the payer and is not taken from the unallocated reserve. The reserve funds the reward allocation, the 20% referral budget and the 10% premium budget:
 
-| Reward allocation | Referral allocation | Premium allocation | `AIRDROP` stake reward | Total reserve allocation `c × A` |
-|---:|---:|---:|---:|---:|
-| 288% of `A` | 20% of `A` | 10% of `A` | up to 86.4% of `A` | 3.18 to 4.044 × `A` |
+| Reward allocation | Referral allocation | Premium allocation | Total reserve allocation |
+|---:|---:|---:|---:|
+| 288% of `A` | 20% of `A` | 10% of `A` | 3.18 × `A` |
 
-The referral and premium allocations are fully accounted for at stake time. Shares and awards paid to uplines leave the staking contract immediately. The unpaid remainder is not free reserve: it is a liability recorded as an `AIRDROP` stake, whose reward is allocated in addition. It therefore remains part of the allocated 30% and cannot be counted again as available reserve.
+The referral and premium allocations are fully spent at stake time: the shares and awards paid to uplines and the unpaid remainder transferred to `AIRDROP` leave the staking contract in the stake call, so no part of the 30% stays behind as a liability or returns to the reserve.
 
 ### 9.2 Reserve after the staking contract is set
 
 When the staking contract is set, the deployment contract funds it with `TOTAL_SUPPLY − POOL_SUPPLY_CAP − AUTHORS_SUPPLY`, keeps `POOL_SUPPLY_CAP` for the pool and opens the creators' stake for `AUTHORS`.
 
-The creators' stake follows the ordinary 1080-day rules. Since `AUTHORS` is unbound when its stake opens, it has no upline; the full 100,000 LLGAME referral allocation and 50,000 LLGAME premium allocation therefore become one `AIRDROP` stake of 150,000 LLGAME with its own 432,000 LLGAME reward. The creators' stake also allocates its 1,440,000 LLGAME reward. The unallocated reserve is then:
+The creators' stake follows the ordinary 1080-day rules. Since `AUTHORS` is unbound when its stake opens, it has no upline; the full 40,000 LLGAME referral allocation and 20,000 LLGAME premium allocation are therefore transferred to `AIRDROP`, 60,000 LLGAME in all. The creators' stake also allocates its 576,000 LLGAME reward. The unallocated reserve is then:
 
 ```
 R_launch = TOTAL_SUPPLY − POOL_SUPPLY_CAP − AUTHORS_SUPPLY
           − floor(288 × AUTHORS_SUPPLY / 100)
           − floor(20 × AUTHORS_SUPPLY / 100) − floor(10 × AUTHORS_SUPPLY / 100)
-          − floor(288 × (floor(20 × AUTHORS_SUPPLY / 100) + floor(10 × AUTHORS_SUPPLY / 100)) / 100)
 
-         = 3.4 × 10^29 − 3,522,000 LLGAME
+         = 3.4 × 10^29 − 1,836,000 LLGAME
 ```
 
-The subtraction comprises 1,000,000 LLGAME held for the pool, whose unused part returns to the reserve at close, and 500,000 LLGAME principal, 1,440,000 LLGAME reward, 100,000 LLGAME referral allocation and 50,000 LLGAME premium allocation for the creators' stake, and 432,000 LLGAME reward of the resulting `AIRDROP` stake. The result is positive and exact with the stated integer-floor operations. The staking contract's token balance at that moment is `TOTAL_SUPPLY − POOL_SUPPLY_CAP`; that balance is divided between the creators' principal and reward, the `AIRDROP` stake's principal and reward, and `R_launch`.
+The subtraction comprises 1,000,000 LLGAME held for the pool, whose unused part returns to the reserve at close, and 200,000 LLGAME principal, 576,000 LLGAME reward, 40,000 LLGAME referral allocation and 20,000 LLGAME premium allocation for the creators' stake. The result is positive and exact with the stated integer-floor operations. The staking contract's token balance at that moment is `TOTAL_SUPPLY − POOL_SUPPLY_CAP − 60,000` LLGAME, the two budgets having left it for `AIRDROP`; that balance is divided between the creators' principal and reward and `R_launch`.
 
 ### 9.3 Capacity and duration
 
-For a new ordinary stake of amount `A`, the unallocated reserve must cover up to `4.044 × A`. Ignoring integer rounding, the maximum cumulative principal amount that can be opened against a reserve `R` is therefore bounded by `R / 3.18`.
+For a new ordinary stake of amount `A`, the unallocated reserve must cover `3.18 × A`. Ignoring integer rounding, the maximum cumulative principal amount that can be opened against a reserve `R` is therefore `R / 3.18`.
 
 This is a cumulative stake-volume bound, not a simultaneous-stake limit or a calendar-lifetime guarantee. The actual duration depends primarily on aggregate new stake volume. Referral and premium eligibility changes the destination of the fixed allocations, not their reserve cost; restaking rewards or withdrawn principal can increase later stake volume, while principal withdrawals themselves do not replenish the reserve. The market price and available DEX liquidity may influence demand, but they do not mathematically guarantee a minimum reserve lifetime. The contract's enforceable guarantee is narrower and stronger: every accepted stake is fully allocated at entry, and a new stake reverts if its full reward, referral and premium allocation cannot be covered.
 

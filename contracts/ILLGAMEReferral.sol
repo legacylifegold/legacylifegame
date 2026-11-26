@@ -18,4 +18,13 @@ interface ILLGAMEReferral {
 
     /// @notice The referrer `account` signed for; zero while unbound.
     function referrerOf(address account) external view returns (address);
+
+    /// @notice Maintenance, any caller: climbs at most `maxHops` hops from `account`, never past its root, and saves
+    ///         the ancestor reached as the account's last root, so a chain whose root search no longer fits one
+    ///         transaction is shortened over several. No stake and no binding needs it otherwise.
+    function shortenRootSearch(address account, uint256 maxHops) external;
+
+    /// @notice The `root` above `account`, the account's `depth`, the bindings between the two, and the `hops` a root
+    ///         search from it takes now; a root answers itself, zero and zero.
+    function findRoot(address account) external view returns (address root, uint256 depth, uint256 hops);
 }

@@ -50,7 +50,7 @@ contract LLGAMEDeployment {
     enum State { NotLaunched, Launched, Funding, Closed, Aborted }
 
     address public constant DEAD = 0x000000000000000000000000000000000000dEaD;
-    uint256 private constant AUTHORS_SUPPLY = 500_000e9;
+    uint256 private constant AUTHORS_SUPPLY = 200_000e9;
     uint256 private constant POOL_SUPPLY_CAP = 1_000_000e9;
 
     /// @dev PancakeSwap v2 factory and WBNB on BNB Smart Chain mainnet.
@@ -77,9 +77,9 @@ contract LLGAMEDeployment {
     error PoolNotSupplied();
     error TransferFailed();
 
-    modifier onlyAuthorsIn(State required) {
+    modifier onlyAuthorsIn(State requiredState) {
         if (msg.sender != AUTHORS) revert NotAuthors();
-        if (state != required) revert InvalidState();
+        if (state != requiredState) revert InvalidState();
         _;
     }
 
@@ -87,52 +87,55 @@ contract LLGAMEDeployment {
     ///      distinct accounts and neither may be a fixed address known at publication: zero, DEAD, FACTORY, WBNB,
     ///      the token or its pair, which the constructor resolves, creating it if absent.
     constructor(address token_, address authors_, address airdrop_) {
-        if (token_.code.length == 0 || _isFixed(authors_, token_) || _isFixed(airdrop_, token_) || authors_ == airdrop_) {
-            revert InvalidParameter();
-        }
-        address p = FACTORY.getPair(token_, address(WBNB));
-        if (p == address(0)) p = FACTORY.createPair(token_, address(WBNB));
-        if (authors_ == p || airdrop_ == p) revert InvalidParameter();
+        if (
+            token_.code.length == 0 || _isFixedAddress(authors_, token_) || _isFixedAddress(airdrop_, token_)
+                || authors_ == airdrop_
+        ) revert InvalidParameter();
+        address launchPair = FACTORY.getPair(token_, address(WBNB));
+        if (launchPair == address(0)) launchPair = FACTORY.createPair(token_, address(WBNB));
+        if (authors_ == launchPair || airdrop_ == launchPair) revert InvalidParameter();
         token = IERC20(token_);
         AUTHORS = authors_;
         AIRDROP = airdrop_;
         PUBLISHER = msg.sender;
-        pair = p;
+        pair = launchPair;
     }
 
     /// @notice AUTHORS only, in NotLaunched: pulls the token's whole supply from `holder`, on its permit to this
     ///         contract or, where the permit fails, on an allowance already in place.
     function launch(address holder, uint256 deadline, uint8 v, bytes32 r, bytes32 s) external onlyAuthorsIn(State.NotLaunched) {
-        IERC20 t = token;
-        uint256 total = t.totalSupply();
-        try IERC20Permit(address(t)).permit(holder, address(this), total, deadline, v, r, s) {} catch {}
-        t.transferFrom(holder, address(this), total);
-        if (t.balanceOf(address(this)) != total) revert LaunchCheckFailed();
+        uint256 supply = token.totalSupply();
+        try IERC20Permit(address(token)).permit(holder, address(this), supply, deadline, v, r, s) {} catch {}
+        token.transferFrom(holder, address(this), supply);
+        if (token.balanceOf(address(this)) != supply) revert LaunchCheckFailed();
         state = State.Launched;
     }
 
     /// @notice AUTHORS only, in Launched, once: names the staking contract, initializes its reserve with all the
-    ///         supply but POOL_SUPPLY_CAP and AUTHORS_SUPPLY and opens the creators' stake there.
+    ///         supply but POOL_SUPPLY_CAP and AUTHORS_SUPPLY and opens the creators' stake there. The creators'
+    ///         budgets, unpaid for want of an upline, go to AIRDROP, which held nothing before (the whole supply
+    ///         sat here), so the staking contract and AIRDROP together must hold all the supply but POOL_SUPPLY_CAP.
     function setStaking(address staking_) external onlyAuthorsIn(State.Launched) {
-        IERC20 t = token;
-        ILaunchStaking s = ILaunchStaking(staking_);
-        if (staking_.code.length == 0 || t.balanceOf(staking_) != 0 || s.airdropOf(address(t)) != address(0)) {
-            revert InvalidStaking();
-        }
+        ILaunchStaking launchStaking = ILaunchStaking(staking_);
+        if (
+            staking_.code.length == 0 || token.balanceOf(staking_) != 0
+                || launchStaking.airdropOf(address(token)) != address(0)
+        ) revert InvalidStaking();
         staking = staking_;
         state = State.Funding;
 
-        uint256 total = t.totalSupply();
-        uint256 amount = total - POOL_SUPPLY_CAP - AUTHORS_SUPPLY;
-        t.approve(staking_, amount);
-        s.initialize(address(t), AIRDROP, pair, amount);
-        t.approve(staking_, AUTHORS_SUPPLY);
-        s.stake(address(t), AUTHORS_SUPPLY, AUTHORS);
+        uint256 supply = token.totalSupply();
+        uint256 reserveAmount = supply - POOL_SUPPLY_CAP - AUTHORS_SUPPLY;
+        token.approve(staking_, reserveAmount);
+        launchStaking.initialize(address(token), AIRDROP, pair, reserveAmount);
+        token.approve(staking_, AUTHORS_SUPPLY);
+        launchStaking.stake(address(token), AUTHORS_SUPPLY, AUTHORS);
 
         if (
-            s.airdropOf(address(t)) != AIRDROP || s.pairOf(address(t)) != pair
-                || s.activeStakeOf(address(t), AUTHORS) != AUTHORS_SUPPLY || t.balanceOf(staking_) != total - POOL_SUPPLY_CAP
-                || t.balanceOf(address(this)) != POOL_SUPPLY_CAP
+            launchStaking.airdropOf(address(token)) != AIRDROP || launchStaking.pairOf(address(token)) != pair
+                || launchStaking.activeStakeOf(address(token), AUTHORS) != AUTHORS_SUPPLY
+                || token.balanceOf(staking_) + token.balanceOf(AIRDROP) != supply - POOL_SUPPLY_CAP
+                || token.balanceOf(address(this)) != POOL_SUPPLY_CAP
         ) revert LaunchCheckFailed();
     }
 
@@ -153,26 +156,26 @@ contract LLGAMEDeployment {
         if (msg.sender == address(WBNB)) return; // unwrapping during abort
         if (msg.sender != AUTHORS) revert NotAuthors();
         if (state != State.Funding) revert InvalidState();
-        uint256 bnb = targetBnb;
-        if (msg.value == 0 || bnb == 0) revert InvalidParameter();
+        uint256 bnbTarget = targetBnb;
+        if (msg.value == 0 || bnbTarget == 0) revert InvalidParameter();
 
-        IPancakePair p = IPancakePair(pair);
-        uint256 bnbSupplied = poolBnb;
-        if (bnbSupplied == 0) p.skim(DEAD);
-        bnbSupplied += msg.value;
-        poolBnb = bnbSupplied;
+        IPancakePair dexPair = IPancakePair(pair);
+        uint256 bnbInPool = poolBnb;
+        if (bnbInPool == 0) dexPair.skim(DEAD);
+        bnbInPool += msg.value;
+        poolBnb = bnbInPool;
 
-        uint256 llgame = targetLlgame;
-        uint256 target = llgame * bnbSupplied / bnb;
-        if (target > llgame) target = llgame;
-        uint256 llgameSupplied = poolLlgame;
-        if (target > llgameSupplied) {
-            poolLlgame = target;
-            token.transfer(address(p), target - llgameSupplied);
+        uint256 llgameTarget = targetLlgame;
+        uint256 llgameDue = llgameTarget * bnbInPool / bnbTarget;
+        if (llgameDue > llgameTarget) llgameDue = llgameTarget;
+        uint256 llgameInPool = poolLlgame;
+        if (llgameDue > llgameInPool) {
+            poolLlgame = llgameDue;
+            token.transfer(address(dexPair), llgameDue - llgameInPool);
         }
         WBNB.deposit{value: msg.value}();
-        WBNB.transfer(address(p), msg.value);
-        p.mint(address(this));
+        WBNB.transfer(address(dexPair), msg.value);
+        dexPair.mint(address(this));
     }
 
     /// @notice AUTHORS only, in Funding, the pool supplied: sends the LP tokens to DEAD and funds the staking
@@ -180,43 +183,42 @@ contract LLGAMEDeployment {
     function close() external onlyAuthorsIn(State.Funding) {
         if (poolBnb == 0) revert PoolNotSupplied();
         state = State.Closed;
-        IPancakePair p = IPancakePair(pair);
-        p.transfer(DEAD, p.balanceOf(address(this)));
-        _fundReserve();
+        IPancakePair dexPair = IPancakePair(pair);
+        dexPair.transfer(DEAD, dexPair.balanceOf(address(this)));
+        _fundStakingReserve();
     }
 
     /// @notice AUTHORS only, in Funding: removes the liquidity of the LP tokens held, funds the staking reserve with
     ///         all LLGAME this contract then holds and pays the recovered BNB to AUTHORS.
     function abort() external onlyAuthorsIn(State.Funding) {
         state = State.Aborted;
-        IPancakePair p = IPancakePair(pair);
-        uint256 liquidity = p.balanceOf(address(this));
+        IPancakePair dexPair = IPancakePair(pair);
+        uint256 liquidity = dexPair.balanceOf(address(this));
         if (liquidity != 0) { // none before the first BNB
-            p.transfer(address(p), liquidity);
-            p.burn(address(this));
+            dexPair.transfer(address(dexPair), liquidity);
+            dexPair.burn(address(this));
         }
-        _fundReserve();
+        _fundStakingReserve();
 
-        uint256 amount = WBNB.balanceOf(address(this));
-        if (amount != 0) {
-            WBNB.withdraw(amount);
-            (bool ok,) = AUTHORS.call{value: amount}("");
-            if (!ok) revert TransferFailed();
+        uint256 recoveredBnb = WBNB.balanceOf(address(this));
+        if (recoveredBnb != 0) {
+            WBNB.withdraw(recoveredBnb);
+            (bool sent,) = AUTHORS.call{value: recoveredBnb}("");
+            if (!sent) revert TransferFailed();
         }
     }
 
     // -------------------------------------------------------------- internals
 
-    function _fundReserve() private {
-        IERC20 t = token;
-        uint256 amount = t.balanceOf(address(this));
-        if (amount == 0) return;
-        t.approve(staking, amount);
-        ILaunchStaking(staking).fund(address(t), amount);
+    function _fundStakingReserve() private {
+        uint256 held = token.balanceOf(address(this));
+        if (held == 0) return;
+        token.approve(staking, held);
+        ILaunchStaking(staking).fund(address(token), held);
     }
 
-    function _isFixed(address account, address token_) private pure returns (bool) {
+    function _isFixedAddress(address account, address tokenAddress) private pure returns (bool) {
         return account == address(0) || account == DEAD || account == address(FACTORY) || account == address(WBNB)
-            || account == token_;
+            || account == tokenAddress;
     }
 }
