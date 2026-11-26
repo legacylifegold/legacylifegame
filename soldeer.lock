@@ -1,0 +1,15 @@
+version = 2
+
+[[dependencies]]
+name = "@openzeppelin-contracts"
+version = "5.6.1"
+url = "https://github.com/OpenZeppelin/openzeppelin-contracts/archive/refs/tags/v5.6.1.zip"
+checksum = "fc61c54ba5fb643f9e314ddfbd819b3f5dff4fa0091ec77f8d4fdeb5d92fc169"
+integrity = "150b7d8f3be061f9ddfc807a616fa60f4a47eb59777de72e84dd401a3eca0ad9"
+
+[[dependencies]]
+name = "forge-std"
+version = "1.9.4"
+url = "https://github.com/foundry-rs/forge-std/archive/refs/tags/v1.9.4.zip"
+checksum = "6a258c359f6527408503e34dcadcdad5d3ac047f81bed515b1b8459293a2556a"
+integrity = "3874463846ab995a6a9a88412913cacec6144f7605daa1af57c2d8bf3f210b13"
