@@ -150,7 +150,7 @@ contract GasBurningReferral {
 }
 
 /// @dev The chain every test runs on: WBNB and the PancakeSwap v2 factory at the addresses the deployment contract
-///      names, the token published by its holder and the deployment contract published for it, not yet launched.
+///      names, the token and the deployment contract for it both published by the publisher, not yet launched.
 abstract contract LLGAMEChain is Test {
     uint256 constant U = 1e9; // one LLGAME
     uint256 constant TOTAL = 340_000_000_000_000_000_000_000_000_000 * U;
@@ -166,11 +166,10 @@ abstract contract LLGAMEChain is Test {
     address constant BSC_FACTORY = 0xcA143Ce32Fe78f1f7019d7d551a6402fC5350c73;
     address constant BSC_WBNB = 0xbb4CdB9CBd36B01bD1cBaEBF2De08d9173bc095c;
 
-    address publisher = makeAddr("publisher");
+    address publisher;
+    uint256 publisherKey;
     address authors = makeAddr("authors");
     address airdrop = makeAddr("airdrop");
-    address holder;
-    uint256 holderKey;
     address alice = makeAddr("alice");
     address bob = makeAddr("bob");
     address carol = makeAddr("carol");
@@ -189,38 +188,38 @@ abstract contract LLGAMEChain is Test {
         wbnb = WBNB9(BSC_WBNB);
         deployCodeTo("PancakeFactory.sol:PancakeFactory", abi.encode(address(this)), BSC_FACTORY);
         factory = IFactory(BSC_FACTORY);
-        // the token is published first, its whole supply minted to its publisher, the holder
-        (holder, holderKey) = makeAddrAndKey("holder");
-        vm.prank(holder);
+        // the token is published first, its whole supply minted to the publisher of the deployment contract
+        (publisher, publisherKey) = makeAddrAndKey("publisher");
+        vm.prank(publisher);
         token = new LLGAME();
         vm.prank(publisher);
         dep = new LLGAMEDeployment(address(token), authors, airdrop);
         pair = IPair(dep.pair());
     }
 
-    /// @dev The holder's permit of `value` to the deployment contract, valid for an hour.
+    /// @dev The publisher's permit of `value` to the deployment contract, valid for an hour.
     function _permit(uint256 value) internal view returns (uint256 deadline, uint8 v, bytes32 r, bytes32 s) {
         deadline = block.timestamp + 1 hours;
         bytes32 structHash = keccak256(
             abi.encode(
                 keccak256("Permit(address owner,address spender,uint256 value,uint256 nonce,uint256 deadline)"),
-                holder, address(dep), value, token.nonces(holder), deadline
+                publisher, address(dep), value, token.nonces(publisher), deadline
             )
         );
-        (v, r, s) = vm.sign(holderKey, keccak256(abi.encodePacked("\x19\x01", token.DOMAIN_SEPARATOR(), structHash)));
+        (v, r, s) = vm.sign(publisherKey, keccak256(abi.encodePacked("\x19\x01", token.DOMAIN_SEPARATOR(), structHash)));
     }
 
-    /// @dev AUTHORS launches on the holder's permit: the deployment contract holds the whole supply.
+    /// @dev The publisher launches on its own permit: the deployment contract holds the whole supply.
     function _launch() internal {
         (uint256 deadline, uint8 v, bytes32 r, bytes32 s) = _permit(TOTAL);
-        vm.prank(authors);
-        dep.launch(holder, deadline, v, r, s);
+        vm.prank(publisher);
+        dep.launch(deadline, v, r, s);
     }
 
-    /// @dev BNB that AUTHORS sends to the deployment contract.
+    /// @dev BNB that the publisher sends to the deployment contract.
     function _supply(uint256 bnb) internal {
-        vm.deal(authors, authors.balance + bnb);
-        vm.prank(authors);
+        vm.deal(publisher, publisher.balance + bnb);
+        vm.prank(publisher);
         (bool ok,) = address(dep).call{value: bnb}("");
         require(ok, "supply failed");
     }
@@ -255,12 +254,12 @@ contract LLGAMEDeploymentTest is LLGAMEChain {
 
     function _setStaking() internal {
         _launch();
-        vm.prank(authors);
+        vm.prank(publisher);
         dep.setStaking(address(mock));
     }
 
     function _setPoolAmounts(uint256 llgame, uint256 bnb) internal {
-        vm.prank(authors);
+        vm.prank(publisher);
         dep.setPoolAmounts(llgame, bnb);
     }
 
@@ -290,60 +289,66 @@ contract LLGAMEDeploymentTest is LLGAMEChain {
         assertEq(uint8(dep.state()), uint8(LLGAMEDeployment.State.NotLaunched));
         assertEq(dep.PUBLISHER(), publisher);
         (uint256 deadline, uint8 v, bytes32 r, bytes32 s) = _permit(TOTAL);
-        // AUTHORS alone: neither the publisher nor the holder
-        vm.prank(publisher);
-        vm.expectRevert(LLGAMEDeployment.NotAuthors.selector);
-        dep.launch(holder, deadline, v, r, s);
-        vm.prank(holder);
-        vm.expectRevert(LLGAMEDeployment.NotAuthors.selector);
-        dep.launch(holder, deadline, v, r, s);
-
+        // the publisher alone: neither AUTHORS nor anyone submitting its permit
         vm.prank(authors);
-        dep.launch(holder, deadline, v, r, s);
+        vm.expectRevert(LLGAMEDeployment.NotPublisher.selector);
+        dep.launch(deadline, v, r, s);
+        vm.prank(alice);
+        vm.expectRevert(LLGAMEDeployment.NotPublisher.selector);
+        dep.launch(deadline, v, r, s);
+
+        vm.prank(publisher);
+        dep.launch(deadline, v, r, s);
         assertEq(uint8(dep.state()), uint8(LLGAMEDeployment.State.Launched));
         assertEq(token.balanceOf(address(dep)), TOTAL, "the whole supply");
-        assertEq(token.balanceOf(holder), 0);
+        assertEq(token.balanceOf(publisher), 0);
         assertEq(token.balanceOf(authors), 0, "nothing to AUTHORS");
 
-        vm.prank(authors);
+        vm.prank(publisher);
         vm.expectRevert(LLGAMEDeployment.InvalidState.selector);
-        dep.launch(holder, deadline, v, r, s); // once
+        dep.launch(deadline, v, r, s); // once
     }
 
     // syngate: LEGACY-LIFE-GAME-BSC-DEPLOYMENT-LAUNCH allowance
     function test_launchOnAllowance() public {
-        // a holder short of the whole supply is refused, its allowance notwithstanding
-        vm.startPrank(holder);
+        // a publisher short of the whole supply is refused, its allowance notwithstanding
+        vm.startPrank(publisher);
         token.transfer(alice, 1);
         token.approve(address(dep), TOTAL);
-        vm.stopPrank();
-        vm.prank(authors);
         vm.expectRevert();
-        dep.launch(holder, 0, 0, 0, 0);
+        dep.launch(0, 0, 0, 0);
+        vm.stopPrank();
 
-        // the supply moved on to a holder that approves instead of signing, as a smart wallet does
+        // the supply is pulled from the publisher alone: another holder's allowance takes nothing
+        vm.prank(publisher);
+        token.transfer(bob, TOTAL - 1);
         vm.prank(alice);
         token.transfer(bob, 1);
-        vm.prank(holder);
-        token.transfer(bob, TOTAL - 1);
         vm.prank(bob);
         token.approve(address(dep), TOTAL);
-        vm.prank(authors);
-        dep.launch(bob, 0, 0, 0, 0);
+        vm.prank(publisher);
+        vm.expectRevert();
+        dep.launch(0, 0, 0, 0);
+
+        // back with the publisher, which approves instead of signing, as a smart wallet does
+        vm.prank(bob);
+        token.transfer(publisher, TOTAL);
+        vm.prank(publisher);
+        dep.launch(0, 0, 0, 0);
         assertEq(uint8(dep.state()), uint8(LLGAMEDeployment.State.Launched));
         assertEq(token.balanceOf(address(dep)), TOTAL);
-        assertEq(token.balanceOf(bob), 0);
+        assertEq(token.balanceOf(publisher), 0);
     }
 
     // syngate: LEGACY-LIFE-GAME-BSC-DEPLOYMENT-STAKING set
     function test_setStaking() public {
-        vm.prank(authors);
+        vm.prank(publisher);
         vm.expectRevert(LLGAMEDeployment.InvalidState.selector);
         dep.setStaking(address(mock)); // before the launch
         _launch();
 
         // no pool call before the staking contract is set
-        vm.startPrank(authors);
+        vm.startPrank(publisher);
         vm.expectRevert(LLGAMEDeployment.InvalidState.selector);
         dep.setPoolAmounts(1_000 * U, 1 ether);
         vm.expectRevert(LLGAMEDeployment.InvalidState.selector);
@@ -351,13 +356,13 @@ contract LLGAMEDeploymentTest is LLGAMEChain {
         vm.expectRevert(LLGAMEDeployment.InvalidState.selector);
         dep.abort();
         vm.stopPrank();
-        assertFalse(_sendBnb(authors, 1 ether), "BNB before the staking contract");
-
-        vm.prank(publisher);
-        vm.expectRevert(LLGAMEDeployment.NotAuthors.selector);
-        dep.setStaking(address(mock));
+        assertFalse(_sendBnb(publisher, 1 ether), "BNB before the staking contract");
 
         vm.prank(authors);
+        vm.expectRevert(LLGAMEDeployment.NotPublisher.selector);
+        dep.setStaking(address(mock));
+
+        vm.prank(publisher);
         dep.setStaking(address(mock));
         assertEq(uint8(dep.state()), uint8(LLGAMEDeployment.State.Funding));
         assertEq(dep.staking(), address(mock));
@@ -373,7 +378,7 @@ contract LLGAMEDeploymentTest is LLGAMEChain {
         assertEq(token.balanceOf(authors), 0, "nothing to AUTHORS");
 
         MockLaunchStaking other = new MockLaunchStaking(BSC_WBNB);
-        vm.prank(authors);
+        vm.prank(publisher);
         vm.expectRevert(LLGAMEDeployment.InvalidState.selector);
         dep.setStaking(address(other)); // once
     }
@@ -392,7 +397,7 @@ contract LLGAMEDeploymentTest is LLGAMEChain {
         MockLaunchStaking diverter = new MockLaunchStaking(BSC_WBNB);
         diverter.setDivertBudgets(true);
 
-        vm.startPrank(authors);
+        vm.startPrank(publisher);
         vm.expectRevert(LLGAMEDeployment.InvalidStaking.selector);
         dep.setStaking(alice); // no code
         vm.expectRevert(LLGAMEDeployment.InvalidStaking.selector);
@@ -408,7 +413,7 @@ contract LLGAMEDeploymentTest is LLGAMEChain {
         assertEq(dep.staking(), address(0));
         assertEq(token.balanceOf(address(dep)), TOTAL, "nothing moved");
 
-        vm.prank(authors);
+        vm.prank(publisher);
         dep.setStaking(address(mock));
         assertEq(uint8(dep.state()), uint8(LLGAMEDeployment.State.Funding));
     }
@@ -417,10 +422,11 @@ contract LLGAMEDeploymentTest is LLGAMEChain {
     function test_poolSuppliedInProportion() public {
         _setStaking();
         assertEq(address(pair), factory.getPair(address(token), address(wbnb)), "the canonical pair");
-        assertFalse(_sendBnb(authors, 1 ether), "BNB before the amounts are set");
+        assertFalse(_sendBnb(publisher, 1 ether), "BNB before the amounts are set");
 
         _setPoolAmounts(100_000 * U, 10 ether);
         assertFalse(_sendBnb(alice, 1 ether), "BNB of another account");
+        assertFalse(_sendBnb(authors, 1 ether), "BNB of AUTHORS");
 
         _supply(1 ether);
         assertEq(dep.poolBnb(), 1 ether);
@@ -446,11 +452,11 @@ contract LLGAMEDeploymentTest is LLGAMEChain {
     // syngate: LEGACY-LIFE-GAME-BSC-DEPLOYMENT-POOL amounts
     function test_poolAmounts() public {
         _setStaking();
-        vm.prank(alice);
-        vm.expectRevert(LLGAMEDeployment.NotAuthors.selector);
+        vm.prank(authors);
+        vm.expectRevert(LLGAMEDeployment.NotPublisher.selector);
         dep.setPoolAmounts(1_000 * U, 1 ether);
 
-        vm.startPrank(authors);
+        vm.startPrank(publisher);
         vm.expectRevert(LLGAMEDeployment.InvalidParameter.selector);
         dep.setPoolAmounts(POOL_SUPPLY_CAP + 1, 1 ether);
         vm.expectRevert(LLGAMEDeployment.InvalidParameter.selector);
@@ -465,7 +471,7 @@ contract LLGAMEDeploymentTest is LLGAMEChain {
         assertEq(dep.poolLlgame(), 250 * U, "the price of the amounts last set");
 
         // afterwards neither below what the pool was supplied with
-        vm.startPrank(authors);
+        vm.startPrank(publisher);
         vm.expectRevert(LLGAMEDeployment.InvalidParameter.selector);
         dep.setPoolAmounts(250 * U - 1, 4 ether);
         vm.expectRevert(LLGAMEDeployment.InvalidParameter.selector);
@@ -501,7 +507,7 @@ contract LLGAMEDeploymentTest is LLGAMEChain {
     function test_close() public {
         _setStaking();
         _setPoolAmounts(100_000 * U, 10 ether);
-        vm.prank(authors);
+        vm.prank(publisher);
         vm.expectRevert(LLGAMEDeployment.PoolNotSupplied.selector);
         dep.close();
 
@@ -510,12 +516,12 @@ contract LLGAMEDeploymentTest is LLGAMEChain {
         vm.prank(bob);
         token.transfer(address(dep), 1); // LLGAME sent to the deployment contract directly
 
-        vm.prank(publisher);
-        vm.expectRevert(LLGAMEDeployment.NotAuthors.selector);
+        vm.prank(authors);
+        vm.expectRevert(LLGAMEDeployment.NotPublisher.selector);
         dep.close();
 
         uint256 r0 = mock.reserve(address(token));
-        vm.prank(authors);
+        vm.prank(publisher);
         dep.close();
         assertEq(uint8(dep.state()), uint8(LLGAMEDeployment.State.Closed));
         assertEq(pair.balanceOf(address(dep)), 0);
@@ -524,7 +530,7 @@ contract LLGAMEDeploymentTest is LLGAMEChain {
         assertEq(mock.reserve(address(token)) - r0, POOL_SUPPLY_CAP - 100_000 * U + 1, "the unused rest and the donation");
 
         // nothing accepted afterwards
-        vm.startPrank(authors);
+        vm.startPrank(publisher);
         vm.expectRevert(LLGAMEDeployment.InvalidState.selector);
         dep.close();
         vm.expectRevert(LLGAMEDeployment.InvalidState.selector);
@@ -532,7 +538,7 @@ contract LLGAMEDeploymentTest is LLGAMEChain {
         vm.expectRevert(LLGAMEDeployment.InvalidState.selector);
         dep.setPoolAmounts(100_000 * U, 10 ether);
         vm.stopPrank();
-        assertFalse(_sendBnb(authors, 1 ether), "BNB after the close");
+        assertFalse(_sendBnb(publisher, 1 ether), "BNB after the close");
     }
 
     // syngate: LEGACY-LIFE-GAME-BSC-DEPLOYMENT-ABORT mock
@@ -542,17 +548,18 @@ contract LLGAMEDeploymentTest is LLGAMEChain {
         _supply(4 ether);
         _buy(alice, 2 ether); // a buyer's BNB enters the pool before the abort
 
-        vm.prank(publisher);
-        vm.expectRevert(LLGAMEDeployment.NotAuthors.selector);
+        vm.prank(authors);
+        vm.expectRevert(LLGAMEDeployment.NotPublisher.selector);
         dep.abort();
         vm.prank(alice);
-        vm.expectRevert(LLGAMEDeployment.NotAuthors.selector);
+        vm.expectRevert(LLGAMEDeployment.NotPublisher.selector);
         dep.abort();
 
         uint256 r0 = mock.reserve(address(token));
-        uint256 b0 = authors.balance;
+        uint256 b0 = publisher.balance;
+        uint256 a0 = authors.balance;
         uint256 supply = token.totalSupply();
-        vm.prank(authors);
+        vm.prank(publisher);
         dep.abort();
         assertEq(uint8(dep.state()), uint8(LLGAMEDeployment.State.Aborted));
         assertEq(pair.balanceOf(address(dep)), 0, "the liquidity removed");
@@ -563,10 +570,11 @@ contract LLGAMEDeploymentTest is LLGAMEChain {
         uint256 funded = mock.reserve(address(token)) - r0;
         assertGt(funded, POOL_SUPPLY_CAP - 4_000 * U, "the held rest and the LLGAME recovered from the pool");
         assertEq(token.balanceOf(address(mock)), TOTAL - POOL_SUPPLY_CAP - CREATORS_BUDGETS + funded);
-        assertGt(authors.balance - b0, 4 ether, "the recovered BNB, the buyer's included, to AUTHORS");
+        assertGt(publisher.balance - b0, 4 ether, "the recovered BNB, the buyer's included, to the publisher");
+        assertEq(authors.balance, a0, "none to AUTHORS");
         assertEq(mock.activeStakeOf(address(token), authors), AUTHORS_SUPPLY, "the creators' stake remains");
 
-        vm.startPrank(authors);
+        vm.startPrank(publisher);
         vm.expectRevert(LLGAMEDeployment.InvalidState.selector);
         dep.abort();
         vm.expectRevert(LLGAMEDeployment.InvalidState.selector);
@@ -574,22 +582,22 @@ contract LLGAMEDeploymentTest is LLGAMEChain {
         vm.expectRevert(LLGAMEDeployment.InvalidState.selector);
         dep.setPoolAmounts(10_000 * U, 10 ether);
         vm.stopPrank();
-        assertFalse(_sendBnb(authors, 1 ether), "BNB after the abort");
+        assertFalse(_sendBnb(publisher, 1 ether), "BNB after the abort");
 
         // before the first BNB: no liquidity to remove, the whole cap to the reserve, no BNB recovered
+        vm.startPrank(publisher);
         LLGAME t2 = new LLGAME();
         LLGAMEDeployment d2 = new LLGAMEDeployment(address(t2), authors, airdrop);
         t2.approve(address(d2), TOTAL);
         MockLaunchStaking m2 = new MockLaunchStaking(BSC_WBNB);
-        b0 = authors.balance;
-        vm.startPrank(authors);
-        d2.launch(address(this), 0, 0, 0, 0);
+        b0 = publisher.balance;
+        d2.launch(0, 0, 0, 0);
         d2.setStaking(address(m2));
         d2.abort();
         vm.stopPrank();
         assertEq(m2.reserve(address(t2)), R_LAUNCH + POOL_SUPPLY_CAP, "the whole cap to the reserve");
         assertEq(t2.balanceOf(address(d2)), 0);
-        assertEq(authors.balance, b0);
+        assertEq(publisher.balance, b0);
     }
 
     // syngate: LEGACYLIFE-BSC-NETWORK
@@ -611,7 +619,7 @@ contract LLGAMEDeploymentTest is LLGAMEChain {
     }
 }
 
-/// @dev The staking scenarios on the ecosystem as the deployment contract sets it up: launched on the holder's
+/// @dev The staking scenarios on the ecosystem as the deployment contract sets it up: launched on the publisher's
 ///      permit, a referral contract and the staking contract reading it published, the staking contract set by
 ///      the deployment contract and, by `_close`, a pool of 10,000 LLGAME and 10 BNB supplied and closed.
 contract LLGAMETest is LLGAMEChain {
@@ -629,16 +637,16 @@ contract LLGAMETest is LLGAMEChain {
         _launch();
         referral = new LLGAMEReferral();
         staking = new LLGAMEStaking(address(referral), BSC_WBNB);
-        vm.prank(authors);
+        vm.prank(publisher);
         dep.setStaking(address(staking));
         t = address(token);
     }
 
     function _close() internal {
-        vm.prank(authors);
+        vm.prank(publisher);
         dep.setPoolAmounts(10_000 * U, 10 ether);
         _supply(10 ether);
-        vm.prank(authors);
+        vm.prank(publisher);
         dep.close();
     }
 
@@ -822,19 +830,20 @@ contract LLGAMETest is LLGAMEChain {
 
     // syngate: LEGACY-LIFE-GAME-BSC-DEPLOYMENT-ABORT ledger
     function test_abortFundsLedger() public {
-        vm.prank(authors);
+        vm.prank(publisher);
         dep.setPoolAmounts(10_000 * U, 10 ether);
         _supply(4 ether);
         uint256 r0 = staking.reserve(t);
-        uint256 b0 = authors.balance;
-        vm.prank(authors);
+        uint256 b0 = publisher.balance;
+        vm.prank(publisher);
         dep.abort();
         assertEq(uint8(dep.state()), uint8(LLGAMEDeployment.State.Aborted));
         // all LLGAME but the pair's locked minimum liquidity reaches the reserve
         assertEq(staking.reserve(t) - r0, POOL_SUPPLY_CAP - token.balanceOf(address(pair)));
         assertEq(token.balanceOf(address(staking)) + token.balanceOf(address(pair)) + token.balanceOf(airdrop), TOTAL);
         assertEq(token.balanceOf(address(dep)), 0);
-        assertApproxEqAbs(authors.balance - b0, 4 ether, 1e9, "the recovered BNB to AUTHORS");
+        assertApproxEqAbs(publisher.balance - b0, 4 ether, 1e9, "the recovered BNB to the publisher");
+        assertEq(authors.balance, 0, "none to AUTHORS");
         assertEq(staking.activeStakeOf(t, authors), AUTHORS_SUPPLY, "the creators' stake remains");
         _assertSolvent(t);
     }

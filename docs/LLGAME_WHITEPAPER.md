@@ -23,7 +23,7 @@ Legacy Life game (LLGAME) is the BEP-20 token on BNB Smart Chain (BSC). Its whol
 The supply is allocated as follows:
 
 - `AUTHORS_SUPPLY = 200,000` LLGAME - creators' stake, locked for 1080 days: an ordinary stake opened for the fixed `AUTHORS` address when the staking contract is set;
-- up to `POOL_SUPPLY_CAP = 1,000,000` LLGAME paired with BNB in a launch liquidity pool, in the amounts `AUTHORS` sets during funding, whose liquidity provider (LP) tokens are sent to `DEAD` when funding closes;
+- up to `POOL_SUPPLY_CAP = 1,000,000` LLGAME paired with BNB in a launch liquidity pool, in the amounts the publisher sets during funding, whose liquidity provider (LP) tokens are sent to `DEAD` when funding closes;
 - the remaining supply, with the pool's unused part at close, is held by the staking contract. After the creators' stake is opened, the unallocated part becomes the reserve that funds subsequent staking rewards and referral allocations.
 
 Holders receive value through:
@@ -32,7 +32,7 @@ Holders receive value through:
 - the referral program: a referral budget and a premium budget of each stake, paid inside the stake call to the staker's uplines;
 - gamified airdrops: any non-zero unpaid remainder of those budgets is transferred in the same call to the special `AIRDROP` address as liquid LLGAME, so the accumulated airdrop budget is visible on chain as its balance;
 
-The operational ecosystem consists of the token, a staking contract, a referral contract and a DEX pair, brought together by a separate deployment contract. Two separately controlled addresses participate in its economics: `AUTHORS`, the ordinary beneficiary of the creators' stake, and `AIRDROP`, the special address for accumulated referral remainders.:
+The operational ecosystem consists of the token, a staking contract, a referral contract and a DEX pair, brought together by a separate deployment contract, which its publisher alone drives. Two separately controlled addresses participate in its economics: `AUTHORS`, the ordinary beneficiary of the creators' stake, and `AIRDROP`, the special address for accumulated referral remainders:
 
 | Part | Role | Administration |
 |---|---|---|
@@ -40,8 +40,9 @@ The operational ecosystem consists of the token, a staking contract, a referral 
 | Pool | PancakeSwap v2 LLGAME/WBNB pair, launch LP position sent to `DEAD` at close | None: the pair is DEX code, its protocol `feeTo` share excepted |
 | Staking | Holds the reserve and the ecosystem-account set; submits a beneficiary's signed referral binding to the referral contract; takes stakes paid by their caller for a beneficiary, splits a part of a stake to a delegate, or hands it the whole stake, at its staker's request, allocates rewards, pays referral shares and premium awards to eligible uplines, transfers any non-zero unpaid remainder of their budgets to `AIRDROP` inside the stake call | None: locked at launch |
 | Referral | Standalone record of who referred whom, written on each account's own signature; references no token and no staking contract | None: locked at publication |
-| Deployment contract | Takes the whole supply of the published token, funds the staking contract `AUTHORS` names and opens the creators' stake there, builds the pool from the amounts `AUTHORS` sets and closes at `AUTHORS`' call | Every call `AUTHORS`' alone; no right of its publisher, no upgrade path, no return of LLGAME to `AUTHORS` |
-| `AUTHORS` address | Fixed beneficiary of the creators' stake and the one account able to call the deployment contract; to the token and the staking contract an ordinary account with no exclusion or privilege | Its key or multisig policy controls that account and every call of the deployment contract until close; it has no right over a locked contract |
+| Deployment contract | Takes the whole supply of the published token from its publisher, funds the staking contract the publisher names and opens the creators' stake there, builds the pool from the amounts the publisher sets and closes at the publisher's call | Every call its publisher's alone, ending at close; no upgrade path, no return of LLGAME to the publisher |
+| Publisher | The account that publishes the token, holding its whole supply, and then the deployment contract, whose every call is its own until close | Its key or multisig policy controls every call of the deployment contract and receives the BNB of an abort; it has no right over a locked contract |
+| `AUTHORS` address | Fixed beneficiary of the creators' stake; to the deployment contract, the token and the staking contract an ordinary account with no call, exclusion or privilege | Its key or multisig policy controls only that account |
 | `AIRDROP` address | Special address receiving the unpaid remainders of the referral and premium budgets as liquid LLGAME for later airdrops; cannot participate in the referral program as referrer or referred account | Its key or multisig policy spends what it receives, and stakes, claims and withdraws under the common staking rules |
 
 ### 1.1 Terms
@@ -56,7 +57,7 @@ The operational ecosystem consists of the token, a staking contract, a referral 
 | Referral budget | 20% of each ordinary stake's amount, taken from the stake reserve at stake time and paid recursively to eligible uplines by the halving share formula; any non-zero unpaid remainder is transferred to `AIRDROP` |
 | Premium budget | 10% of each ordinary stake's amount, taken from the stake reserve at stake time and paid to the uplines whose active stake meets a tier of the premium table (section 6); its unpaid remainder joins the referral budget's in the one transfer to `AIRDROP` |
 | Operator | The party running the game; it cannot change the locked contracts or their payout rules |
-| Deployment contract | A launcher bound at publication to the token and to `AUTHORS`, whose calls alone it takes: it pulls the supply, sets the staking contract, supplies the pool and closes (section 7) |
+| Deployment contract | A launcher bound at publication to the token and to its publisher, whose calls alone it takes: it pulls the supply from the publisher, sets the staking contract, supplies the pool and closes (section 7) |
 | Funding | From the setting of the staking contract until close or abort (section 7) |
 | `derived` | Marks a statement that follows from the rules stated elsewhere, not a separate rule |
 
@@ -64,9 +65,9 @@ The operational ecosystem consists of the token, a staking contract, a referral 
 
 Every part of the ecosystem is bound by the following; the requirements of sections 3 to 7 are consequences of these invariants.
 
-1. **Locked at launch.** The token and the staking contract are locked contracts. No proxy, upgradeable part or contract-administration signer exists in the token or staking contracts; the deployment contract's calls are `AUTHORS`' alone and end at close, and the staking contract is the one `AUTHORS` names there, once.
+1. **Locked at launch.** The token and the staking contract are locked contracts. No proxy, upgradeable part or contract-administration signer exists in the token or staking contracts; the deployment contract's calls are its publisher's alone and end at close, and the staking contract is the one the publisher names there, once.
 2. **No mint after creation.** The token's constructor mints the whole supply and no function can mint again. Every staking reward and referral allocation is funded from the staking contract's pre-minted holdings.
-3. **No administration of value.** No key can move LLGAME out of a locked contract except through its fixed rules: staking principal withdrawal, reward claim, referral payout and the transfer of the referral remainder to `AIRDROP`. From close, the launch LP position is irretrievably held at `DEAD`; during funding only an abort removes its liquidity, returning its BNB to `AUTHORS`; PancakeSwap may separately mint protocol-fee LP shares to its configured `feeTo` address under the DEX's own rules, as described in section 4. `AIRDROP` claims and withdraws under the common rules and has no administrative right over any contract.
+3. **No administration of value.** No key can move LLGAME out of a locked contract except through its fixed rules: staking principal withdrawal, reward claim, referral payout and the transfer of the referral remainder to `AIRDROP`. From close, the launch LP position is irretrievably held at `DEAD`; during funding only an abort removes its liquidity, returning its BNB to the publisher of the deployment contract; PancakeSwap may separately mint protocol-fee LP shares to its configured `feeTo` address under the DEX's own rules, as described in section 4. `AIRDROP` claims and withdraws under the common rules and has no administrative right over any contract.
 4. **Fixed conditions.** The staking term and rate, the referral and premium budgets, the referral formula and the premium table, the fixed `AUTHORS` beneficiary, the `AIRDROP` address and the fixed ecosystem-account exclusion set are immutable or constants of the contracts that use them.
 5. **Solvent by construction.** Nothing is owed beyond what is allocated: a stake reverts when the stake reserve cannot cover its reward and its referral and premium budgets; the referral walk pays eligible shares within the stake's referral budget and premium awards within its premium budget in the same call, and any unpaid part of both is transferred to `AIRDROP` in that call, so no part of the budgets stays owed. The sum of the staking contract's accounted ledgers—principal still held, allocated rewards not yet claimed and unallocated reserve—never exceeds its LLGAME balance. A direct token transfer to the staking contract outside `stake` and `fund` is an unsolicited donation: it is not credited to the reserve or any stake ledger and has no withdrawal path.
 6. **Deterministic binding and payouts.** A referral binding is written only on the account's own signature over its referrer, once, and never where it would close a cycle; a plain token transfer binds nothing. Referral shares are paid to uplines whose liquid balance and `activeStakeOf` both meet the level's fixed threshold, down to the level at which the walk ends, and premium awards to uplines whose `activeStakeOf` meets a tier of the fixed premium table (section 6). No off-chain party can alter the binding, the shares, the awards or the thresholds, and the staker cannot either through its stake transaction: the walk reads neither its gas, its gas price nor the pool's price, and a transaction short of gas for it reverts whole. Distribution of the LLGAME `AIRDROP` receives is an off-chain activity and is not controlled by the contracts.
@@ -89,7 +90,7 @@ The token adds nothing to the OpenZeppelin `ERC20`, `ERC20Burnable` and `ERC20Pe
 
 The launch pool is the canonical PancakeSwap v2 LLGAME/WBNB pair. At close it holds:
 
-- The LLGAME, at most `POOL_SUPPLY_CAP`, and the BNB as WBNB that `AUTHORS` supplied (section 7.2). Their ratio is the launch price, which `AUTHORS` sets and corrects for the BNB rate until the close.
+- The LLGAME, at most `POOL_SUPPLY_CAP`, and the BNB as WBNB that the publisher supplied (section 7.2). Their ratio is the launch price, which the publisher sets and corrects for the BNB rate until the close.
 - `POOL_SUPPLY_CAP` is one part in 3.4 × 10^23 of the total supply. The pool is the initial DEX source of freely tradable LLGAME; the creators' principal is locked in staking, while reserve distributions occur only through the staking rules. Tokens subsequently circulate through ordinary transfers, staking payouts, referral payouts and any off-chain airdrops funded by the remainders `AIRDROP` receives.
 - The launch LP tokens are held at the dead address, so that position is locked without a locker contract or owner. Swap fees remain in the pair's reserves; the PancakeSwap protocol may separately mint `feeTo` LP shares under its own factory-controlled fee mechanism.
 
@@ -287,7 +288,7 @@ The referral budget is `floor(20 × A / 100)` base units and the premium budget 
 
 ## 7. Deployment contract
 
-The deployment contract takes the whole supply of the token, published before it, hands the reserve to a staking contract named later and builds the launch pool. Its constructor fixes the token, `AUTHORS` and `AIRDROP` as immutables, resolves the canonical pair, creating it if absent, and records its sender as `PUBLISHER`, a record no call checks: the publisher keeps no right over the contract. Every call of the contract is `AUTHORS`' alone. `AUTHORS_SUPPLY` and `POOL_SUPPLY_CAP` are predefined constants. The contract has no upgrade path and no call that returns LLGAME to `AUTHORS`: the supply it took leaves it only to the staking contract or to the pool.
+The deployment contract takes the whole supply of the token, published before it, hands the reserve to a staking contract named later and builds the launch pool. Its constructor fixes the token, `AUTHORS` and `AIRDROP` as immutables, resolves the canonical pair, creating it if absent, and records its sender as `PUBLISHER`. Every call of the contract is the publisher's alone, the account holding the supply until the launch; `AUTHORS` is only the beneficiary of the creators' stake and has no call of it. `AUTHORS_SUPPLY` and `POOL_SUPPLY_CAP` are predefined constants. The contract has no upgrade path and no call that returns LLGAME to the publisher: the supply it took leaves it only to the staking contract or to the pool.
 
 ### 7.1 Interface
 
@@ -315,15 +316,15 @@ contract Deployment {
     // Non-payable; the sender is recorded as PUBLISHER.
     constructor(address token_, address authors_, address airdrop_);
 
-    // AUTHORS only, each in the state named.
-    function launch(address holder, uint256 deadline, uint8 v, bytes32 r, bytes32 s) external;   // NotLaunched
+    // PUBLISHER only, each in the state named.
+    function launch(uint256 deadline, uint8 v, bytes32 r, bytes32 s) external;   // NotLaunched
     function setStaking(address staking_) external;                              // Launched, once
     function setPoolAmounts(uint256 llgame, uint256 bnb) external;       // Funding, any number of times
     receive() external payable;                                                  // Funding, amounts set: supplies the pool
     function close() external;                                                   // Funding
     function abort() external;                                                   // Funding
 
-    function PUBLISHER() external view returns (address);   // the sender of the publication
+    function PUBLISHER() external view returns (address);   // the sender of the publication, the caller of every step
     function state() external view returns (State);
     function staking() external view returns (address);     // zero until set
     function pair() external view returns (address);
@@ -334,7 +335,7 @@ contract Deployment {
 
 ### 7.2 Launch, staking and pool
 
-The contract passes through its states in one order, each step a call of `AUTHORS`:
+The contract passes through its states in one order, each step a call of the publisher:
 
 | State | Entered by | Holds |
 |---|---|---|
@@ -344,7 +345,7 @@ The contract passes through its states in one order, each step a call of `AUTHOR
 | `Closed` | `close` | Nothing |
 | `Aborted` | `abort` | Nothing |
 
-`launch(holder, deadline, v, r, s)` pulls the token's whole `totalSupply()` from `holder`, the account the token's publication minted the supply to or one it was moved to since, which need not be `AUTHORS`. It pulls on the holder's `ERC20Permit` signature passed, naming the deployment contract as spender, or, where the permit fails, on an allowance already in place: a permit submitted ahead by someone else, or an `approve` by a holder that is a smart wallet and cannot sign one. The holder sends no transaction of its own; the signature serves no one but the deployment contract, and the call passes only when the contract then holds the whole supply.
+`launch(deadline, v, r, s)` pulls the token's whole `totalSupply()` from the publisher, which holds it from the token's publication on. It pulls on the publisher's `ERC20Permit` signature passed, naming the deployment contract as spender, or, where the permit fails, on an allowance already in place: a permit submitted ahead, or an `approve` by a publisher that is a smart wallet and cannot sign one. Supply held by any other account is not pulled, and the call passes only when the contract then holds the whole supply.
 
 `setStaking(staking_)` names the staking contract, once and irrevocably. The address must hold code, answer `airdropOf(token)` with the zero address, the token not yet initialized there, and hold no LLGAME. The call then:
 - funds it with `TOTAL_SUPPLY − POOL_SUPPLY_CAP − AUTHORS_SUPPLY` through `initialize(token, AIRDROP, pair, amount)`, which fixes there for the token, once and with its reserve, the `AIRDROP` account, the launch pair and, as its caller, the deployment contract;
@@ -352,27 +353,27 @@ The contract passes through its states in one order, each step a call of `AUTHOR
 - verifies `airdropOf(token)` and `pairOf(token)` as passed, `activeStakeOf(AUTHORS) == AUTHORS_SUPPLY`, the balances of the staking contract and of `AIRDROP` together `TOTAL_SUPPLY − POOL_SUPPLY_CAP`, so that the budgets of the creators' stake, unpaid for want of an upline, reached `AIRDROP` and nowhere else, and its own balance of `POOL_SUPPLY_CAP`;
 - enters `Funding`.
 
-`AIRDROP` holds no LLGAME before that call, the deployment contract holding the whole supply (`derived`). These checks prove that the contract answers the interface of section 7.1 and recorded the creators' stake, not how it behaves afterwards: the staking contract is `AUTHORS`' choice, and the invariants of section 2 hold for the ecosystem only as far as the contract named keeps them. The deployment contract knows nothing of a referral contract; whether the staking contract uses one is its own matter. No pool call passes before `setStaking`.
+`AIRDROP` holds no LLGAME before that call, the deployment contract holding the whole supply (`derived`). These checks prove that the contract answers the interface of section 7.1 and recorded the creators' stake, not how it behaves afterwards: the staking contract is the publisher's choice, and the invariants of section 2 hold for the ecosystem only as far as the contract named keeps them. The deployment contract knows nothing of a referral contract; whether the staking contract uses one is its own matter. No pool call passes before `setStaking`.
 
-`setPoolAmounts(llgame, bnb)` sets the pool's target amounts and moves nothing: `llgame`, at most `POOL_SUPPLY_CAP`, to be paired with `bnb`. Until the first BNB arrives `AUTHORS` changes them freely, the pair holding no liquidity, and so fixes the launch price for the BNB rate of the day; afterwards neither may be set below what the pool was already supplied with.
+`setPoolAmounts(llgame, bnb)` sets the pool's target amounts and moves nothing: `llgame`, at most `POOL_SUPPLY_CAP`, to be paired with `bnb`. Until the first BNB arrives the publisher changes them freely, the pair holding no liquidity, and so fixes the launch price for the BNB rate of the day; afterwards neither may be set below what the pool was already supplied with.
 
-The pool is supplied by BNB that `AUTHORS` sends to the contract in `Funding`, once the amounts are set; any other transfer reverts. Each transfer adds its BNB to `poolBnb()`, brings `poolLlgame()` up to `min(llgame, floor(llgame × poolBnb / bnb))`, never down, sends both additions to the pair and mints LP tokens to the deployment contract; the first one skims the pair's stray WBNB to `DEAD` beforehand. The pair is live from that first transfer on. Amounts changed afterwards change the LLGAME that later BNB brings, and move the pool's price only as far as that BNB carries it.
+The pool is supplied by BNB that the publisher sends to the contract in `Funding`, once the amounts are set; any other transfer reverts. Each transfer adds its BNB to `poolBnb()`, brings `poolLlgame()` up to `min(llgame, floor(llgame × poolBnb / bnb))`, never down, sends both additions to the pair and mints LP tokens to the deployment contract; the first one skims the pair's stray WBNB to `DEAD` beforehand. The pair is live from that first transfer on. Amounts changed afterwards change the LLGAME that later BNB brings, and move the pool's price only as far as that BNB carries it.
 
 `close()` requires a supplied pool, sends the LP tokens to `DEAD`, funds the staking reserve with the unused rest of `POOL_SUPPLY_CAP` and enters `Closed`.
 
 ### 7.3 Abort
 
-In `Funding`, `abort` removes the liquidity of the LP tokens held, funds the staking reserve with the LLGAME received and the LLGAME still held, unwraps the WBNB received, pays it to `AUTHORS`, the one account that supplied BNB, and enters `Aborted`. Before the first BNB there are no LP tokens: the abort then funds the reserve with the whole `POOL_SUPPLY_CAP` and recovers no BNB. The token and the staking contract, with its reserve and the creators' stake, remain as set.
+In `Funding`, `abort` removes the liquidity of the LP tokens held, funds the staking reserve with the LLGAME received and the LLGAME still held, unwraps the WBNB received, pays it to the publisher, the one account that supplied BNB, and enters `Aborted`. Before the first BNB there are no LP tokens: the abort then funds the reserve with the whole `POOL_SUPPLY_CAP` and recovers no BNB. The token and the staking contract, with its reserve and the creators' stake, remain as set.
 
 ### 7.4 Guarantees
 
 | Property | Guarantee held |
 |---|---|
-| Token and `AUTHORS` immutable, supply split by constants | Once launched, the supply can reach only the staking contract or the pool; `AUTHORS` receives LLGAME only as the staker of the creators' stake |
-| Every call `AUTHORS`' alone, none the publisher's | The key that signs the publication keeps no right over the launch; no third party can launch, name a staking contract, fund the pool or close |
+| Token, `AUTHORS` and the publisher immutable, supply split by constants | Once launched, the supply can reach only the staking contract or the pool; the publisher gets no LLGAME back, and `AUTHORS` receives LLGAME only as the staker of the creators' stake |
+| Every call the publisher's alone | The key that held the supply drives the launch to its close; no third party, `AUTHORS` included, can launch, name a staking contract, fund the pool, close or abort |
 | Staking linked when funded | The staking contract takes `AIRDROP`, the pair and the deployment contract from the call that funds its reserve, not from its own publication: they are the deployment contract's values by construction |
 | Staking set once | The reserve and the creators' stake go to one contract, readable from `staking()` before any pool call; it cannot be replaced |
-| Pool amounts only raised, LLGAME within `POOL_SUPPLY_CAP` | `AUTHORS` cannot take liquidity back short of an abort, nor put more than the cap into the pool; the launch price itself is `AUTHORS`' decision until the close |
+| Pool amounts only raised, LLGAME within `POOL_SUPPLY_CAP` | The publisher cannot take liquidity back short of an abort, nor put more than the cap into the pool; the launch price itself is the publisher's decision until the close |
 | Canonical pair | Only the factory-computed pair is used, known from the publication on |
 | LP tokens sent to `DEAD` at close | Liquidity is locked without a locker or owner; invariant 3 |
 | States in one order | Each of `launch`, `setStaking`, `close` and `abort` passes once; nothing is accepted after `Closed` or `Aborted` |
@@ -406,7 +407,7 @@ From `setStaking` on the creators' stake accrues a reward `AUTHORS` can claim, a
 | Reward rate | 288% of principal over the term |
 | Reward release | Linear over the stake term, claimable by the staker as it accrues |
 | Pool | PancakeSwap v2 LLGAME/WBNB pair; launch LP position sent to `DEAD` at close |
-| Funding | BNB sent by `AUTHORS`, entering the pool with LLGAME in the proportion of the pool amounts `AUTHORS` set, until `AUTHORS` closes |
+| Funding | BNB sent by the publisher, entering the pool with LLGAME in the proportion of the pool amounts the publisher set, until the publisher closes |
 | Unpaid remainder | Whatever the referral and premium budgets leave unpaid, when non-zero, is transferred to `AIRDROP` in the stake call as liquid LLGAME, opening no stake and allocating no reward |
 
 ### 8.2 Values fixed before publication
@@ -415,9 +416,10 @@ Every value in this table must be final before the contract that takes it is pub
 
 | Parameter | Meaning | Requirement |
 |---|---|---|
-| `AUTHORS` | Address that receives the creators' stake and alone calls the deployment contract | Non-zero; not in the staking contract's `excluded` set; must be an EOA or a smart wallet able to call the staking contract and every call of the deployment contract |
+| `AUTHORS` | Address that receives the creators' stake | Non-zero; not in the staking contract's `excluded` set; must be an EOA or a smart wallet able to call the staking contract |
 | `AIRDROP` | Special address receiving the referral remainders | Non-zero; distinct from `AUTHORS`, the token, pair, staking contract, deployment contract, `DEAD`, factory and WBNB; included in `excluded`; must be an EOA or a smart wallet able to call the staking contract |
-| Token | Address of the published LLGAME token | Holds the token's code; its whole supply is at one holder, whose permit or approval `AUTHORS` has for the launch |
+| Token | Address of the published LLGAME token | Holds the token's code; its whole supply is at the account that publishes the deployment contract, which permits or approves it for the launch |
+| Publisher | The sender of the deployment contract's publication, recorded as `PUBLISHER` | Holds the whole supply at the launch; must be an EOA or a smart wallet able to make every call of the deployment contract and to receive BNB |
 
 ## 9. Reserve accounting
 

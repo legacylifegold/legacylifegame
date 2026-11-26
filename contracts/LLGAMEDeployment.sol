@@ -43,9 +43,10 @@ interface ILaunchStaking {
 
 /// @title LLGAME deployment contract
 /// @notice Takes the whole supply of the token published before it, hands the reserve and the creators' stake to
-///         the staking contract named to it, supplies the pool and closes, each step a call of AUTHORS alone.
-///         The publisher keeps no right over it, and no call returns LLGAME to AUTHORS: the supply leaves the
-///         contract only to the staking contract or to the pool.
+///         the staking contract named to it, supplies the pool and closes, each step a call of its publisher alone,
+///         the account holding the supply until the launch. AUTHORS is only the beneficiary of the creators' stake
+///         and has no call of it. No call returns LLGAME to the publisher: the supply leaves the contract only to
+///         the staking contract or to the pool.
 contract LLGAMEDeployment {
     enum State { NotLaunched, Launched, Funding, Closed, Aborted }
 
@@ -59,26 +60,26 @@ contract LLGAMEDeployment {
     IERC20 public immutable token;
     address public immutable AUTHORS;
     address public immutable AIRDROP;
-    address public immutable PUBLISHER; // a record of the publication: no call checks it
+    address public immutable PUBLISHER; // the sender of the publication, the one caller of every step
     address public immutable pair;      // the canonical LLGAME/WBNB pair
 
     State public state;
     address public staking;      // zero until set
     uint256 public poolLlgame;   // LLGAME supplied to the pool
     uint256 public poolBnb;      // BNB supplied to the pool
-    uint256 public targetLlgame; // the pool amounts AUTHORS set: targetLlgame LLGAME to targetBnb BNB
+    uint256 public targetLlgame; // the pool amounts the publisher set: targetLlgame LLGAME to targetBnb BNB
     uint256 public targetBnb;
 
     error InvalidParameter();
     error InvalidState();
-    error NotAuthors();
+    error NotPublisher();
     error InvalidStaking();
     error LaunchCheckFailed();
     error PoolNotSupplied();
     error TransferFailed();
 
-    modifier onlyAuthorsIn(State requiredState) {
-        if (msg.sender != AUTHORS) revert NotAuthors();
+    modifier onlyPublisherIn(State requiredState) {
+        if (msg.sender != PUBLISHER) revert NotPublisher();
         if (state != requiredState) revert InvalidState();
         _;
     }
@@ -101,21 +102,21 @@ contract LLGAMEDeployment {
         pair = launchPair;
     }
 
-    /// @notice AUTHORS only, in NotLaunched: pulls the token's whole supply from `holder`, on its permit to this
-    ///         contract or, where the permit fails, on an allowance already in place.
-    function launch(address holder, uint256 deadline, uint8 v, bytes32 r, bytes32 s) external onlyAuthorsIn(State.NotLaunched) {
+    /// @notice The publisher only, in NotLaunched: pulls the token's whole supply from the publisher, on its permit
+    ///         to this contract or, where the permit fails, on an allowance already in place.
+    function launch(uint256 deadline, uint8 v, bytes32 r, bytes32 s) external onlyPublisherIn(State.NotLaunched) {
         uint256 supply = token.totalSupply();
-        try IERC20Permit(address(token)).permit(holder, address(this), supply, deadline, v, r, s) {} catch {}
-        token.transferFrom(holder, address(this), supply);
+        try IERC20Permit(address(token)).permit(PUBLISHER, address(this), supply, deadline, v, r, s) {} catch {}
+        token.transferFrom(PUBLISHER, address(this), supply);
         if (token.balanceOf(address(this)) != supply) revert LaunchCheckFailed();
         state = State.Launched;
     }
 
-    /// @notice AUTHORS only, in Launched, once: names the staking contract, initializes its reserve with all the
+    /// @notice The publisher only, in Launched, once: names the staking contract, initializes its reserve with all the
     ///         supply but POOL_SUPPLY_CAP and AUTHORS_SUPPLY and opens the creators' stake there. The creators'
     ///         budgets, unpaid for want of an upline, go to AIRDROP, which held nothing before (the whole supply
     ///         sat here), so the staking contract and AIRDROP together must hold all the supply but POOL_SUPPLY_CAP.
-    function setStaking(address staking_) external onlyAuthorsIn(State.Launched) {
+    function setStaking(address staking_) external onlyPublisherIn(State.Launched) {
         ILaunchStaking launchStaking = ILaunchStaking(staking_);
         if (
             staking_.code.length == 0 || token.balanceOf(staking_) != 0
@@ -139,9 +140,9 @@ contract LLGAMEDeployment {
         ) revert LaunchCheckFailed();
     }
 
-    /// @notice AUTHORS only, in Funding, any number of times: the pool amounts, `llgame` LLGAME, at most
+    /// @notice The publisher only, in Funding, any number of times: the pool amounts, `llgame` LLGAME, at most
     ///         POOL_SUPPLY_CAP, to `bnb` BNB. Nothing moves; neither may be set below what the pool was supplied with.
-    function setPoolAmounts(uint256 llgame, uint256 bnb) external onlyAuthorsIn(State.Funding) {
+    function setPoolAmounts(uint256 llgame, uint256 bnb) external onlyPublisherIn(State.Funding) {
         if (llgame == 0 || bnb == 0 || llgame > POOL_SUPPLY_CAP || llgame < poolLlgame || bnb < poolBnb) {
             revert InvalidParameter();
         }
@@ -149,12 +150,12 @@ contract LLGAMEDeployment {
         targetBnb = bnb;
     }
 
-    /// @notice AUTHORS only, in Funding, the amounts set: adds the BNB to the pool with the LLGAME that brings
+    /// @notice The publisher only, in Funding, the amounts set: adds the BNB to the pool with the LLGAME that brings
     ///         poolLlgame up to min(llgame, llgame × poolBnb / bnb), never down, minting LP tokens to this contract.
     ///         The first transfer skims the pair's stray balances to DEAD beforehand.
     receive() external payable {
         if (msg.sender == address(WBNB)) return; // unwrapping during abort
-        if (msg.sender != AUTHORS) revert NotAuthors();
+        if (msg.sender != PUBLISHER) revert NotPublisher();
         if (state != State.Funding) revert InvalidState();
         uint256 bnbTarget = targetBnb;
         if (msg.value == 0 || bnbTarget == 0) revert InvalidParameter();
@@ -178,9 +179,9 @@ contract LLGAMEDeployment {
         dexPair.mint(address(this));
     }
 
-    /// @notice AUTHORS only, in Funding, the pool supplied: sends the LP tokens to DEAD and funds the staking
+    /// @notice The publisher only, in Funding, the pool supplied: sends the LP tokens to DEAD and funds the staking
     ///         reserve with all LLGAME this contract holds, the unused rest of POOL_SUPPLY_CAP and any sent to it.
-    function close() external onlyAuthorsIn(State.Funding) {
+    function close() external onlyPublisherIn(State.Funding) {
         if (poolBnb == 0) revert PoolNotSupplied();
         state = State.Closed;
         IPancakePair dexPair = IPancakePair(pair);
@@ -188,9 +189,9 @@ contract LLGAMEDeployment {
         _fundStakingReserve();
     }
 
-    /// @notice AUTHORS only, in Funding: removes the liquidity of the LP tokens held, funds the staking reserve with
-    ///         all LLGAME this contract then holds and pays the recovered BNB to AUTHORS.
-    function abort() external onlyAuthorsIn(State.Funding) {
+    /// @notice The publisher only, in Funding: removes the liquidity of the LP tokens held, funds the staking reserve
+    ///         with all LLGAME this contract then holds and pays the recovered BNB to the publisher.
+    function abort() external onlyPublisherIn(State.Funding) {
         state = State.Aborted;
         IPancakePair dexPair = IPancakePair(pair);
         uint256 liquidity = dexPair.balanceOf(address(this));
@@ -203,7 +204,7 @@ contract LLGAMEDeployment {
         uint256 recoveredBnb = WBNB.balanceOf(address(this));
         if (recoveredBnb != 0) {
             WBNB.withdraw(recoveredBnb);
-            (bool sent,) = AUTHORS.call{value: recoveredBnb}("");
+            (bool sent,) = PUBLISHER.call{value: recoveredBnb}("");
             if (!sent) revert TransferFailed();
         }
     }
