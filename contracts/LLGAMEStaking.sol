@@ -38,7 +38,8 @@ contract LLGAMEStaking is ReentrancyGuardTransient {
         uint128 claimed;
     }
 
-    /// @dev The beneficiary's signed agreement to `referrer`, as the referral contract's `bind` takes it.
+    /// @dev The beneficiary's signed agreement to `referrer`, as the referral contract's `bind` takes it: `site` is
+    ///      the host of the `https` site it was signed on, without the scheme.
     struct ReferralBinding {
         address referrer;
         string site;

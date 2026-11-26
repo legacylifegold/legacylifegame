@@ -615,7 +615,7 @@ contract LLGAMEDeploymentTest is LLGAMEChain {
 ///      permit, a referral contract and the staking contract reading it published, the staking contract set by
 ///      the deployment contract and, by `_close`, a pool of 10,000 LLGAME and 10 BNB supplied and closed.
 contract LLGAMETest is LLGAMEChain {
-    string constant SITE = "https://legacylife.online";
+    string constant SITE = "legacylife.online";   // the host of the site signed on, as `bind` takes it
     string constant NONCE = "a1B2c3D4e5F6g7H8";
     string constant ISSUED_AT = "2026-11-25T10:00:00Z";
     uint256 constant MIN = 72_000_000;

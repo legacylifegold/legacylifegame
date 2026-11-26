@@ -18,7 +18,8 @@ contract OwnedWallet {
 }
 
 contract LLGAMEReferralTest is Test {
-    string private constant SITE = "https://legacylife.online";
+    /// @dev The host of the site the agreements are signed on, https://legacylife.online, as `bind` takes it.
+    string private constant SITE = "legacylife.online";
     string private constant NONCE = "a1B2c3D4e5F6g7H8";
     string private constant ISSUED_AT = "2026-11-25T10:00:00Z";
 
@@ -55,7 +56,34 @@ contract LLGAMEReferralTest is Test {
 
     /// @dev The `personal_sign` of the agreement by `key`, 65 bytes as a wallet gives them.
     function _sign(uint256 key, address account, address to) private view returns (bytes memory) {
-        bytes memory message = _message(account, to);
+        return _signMessage(key, _message(account, to));
+    }
+
+    /// @dev The same agreement as a dApp at `origin` words it, `host` being what it writes of that origin on the
+    ///      first line; the two are given apart, as the dApp reads them from the page.
+    function _messageOn(string memory origin, string memory host, address account, address to)
+        private
+        view
+        returns (bytes memory)
+    {
+        return bytes(
+            string.concat(
+                host,
+                " wants you to sign in with your Ethereum account:\n",
+                vm.toString(account),
+                "\n\nI agree that ",
+                vm.toString(to),
+                " is my referrer in Legacy Life Game.\n\nURI: ",
+                origin,
+                "\nVersion: 1\nChain ID: ",
+                vm.toString(block.chainid),
+                "\nNonce: a1B2c3D4e5F6g7H8\nIssued At: 2026-11-25T10:00:00Z\nResources:\n- urn:llgame:referrer:",
+                vm.toString(to)
+            )
+        );
+    }
+
+    function _signMessage(uint256 key, bytes memory message) private pure returns (bytes memory) {
         bytes32 digest =
             keccak256(abi.encodePacked("\x19Ethereum Signed Message:\n", vm.toString(message.length), message));
         (uint8 v, bytes32 r, bytes32 s) = vm.sign(key, digest);
@@ -68,7 +96,7 @@ contract LLGAMEReferralTest is Test {
         assertEq(referral.referrerOf(account), address(0), "nothing written");
     }
 
-    // syngate: LEGACYLIFE-BSC-REFERRAL-SIGNATURE
+    // syngate: LEGACYLIFE-BSC-REFERRAL-SIGNATURE signer
     function test_bindingSignature() public {
         bytes memory own = _sign(aliceKey, alice, referrer);
         assertEq(own.length, 65);
@@ -85,14 +113,11 @@ contract LLGAMEReferralTest is Test {
         _refused(alice, referrer, elsewhere);
         // the same agreement passed with another site, nonce or time than signed
         vm.expectRevert(LLGAMEReferral.InvalidSignature.selector);
-        referral.bind(alice, referrer, "https://legacylife.example", NONCE, ISSUED_AT, own);
+        referral.bind(alice, referrer, "legacylife.example", NONCE, ISSUED_AT, own);
         vm.expectRevert(LLGAMEReferral.InvalidSignature.selector);
         referral.bind(alice, referrer, SITE, "a1B2c3D4e5F6g7H9", ISSUED_AT, own);
         vm.expectRevert(LLGAMEReferral.InvalidSignature.selector);
         referral.bind(alice, referrer, SITE, NONCE, "2026-11-25T10:00:01Z", own);
-        // a site that is no https origin
-        vm.expectRevert(LLGAMEReferral.InvalidSite.selector);
-        referral.bind(alice, referrer, "http://legacylife.online", NONCE, ISSUED_AT, own);
         assertEq(referral.referrerOf(alice), address(0));
 
         // any caller submits the account's own signature (ECDSA)
@@ -111,6 +136,37 @@ contract LLGAMEReferralTest is Test {
 
         // the signature is not kept: the contract's one record of the account is its referrer
         assertEq(vm.load(address(referral), keccak256(abi.encode(alice, uint256(0)))), bytes32(uint256(uint160(referrer))));
+    }
+
+    // syngate: LEGACYLIFE-BSC-REFERRAL-SIGNATURE https_origin
+    function test_httpsOriginBindsByHost() public {
+        (address carol, uint256 carolKey) = makeAddrAndKey("carol");
+
+        // today's message of the dApp at https://legacylife.online, signed as it stands
+        bytes memory signed = _signMessage(aliceKey, _message(alice, referrer));
+        // the origin is no host: with its scheme passed, the URI rebuilt is not the one signed
+        vm.expectRevert(LLGAMEReferral.InvalidSignature.selector);
+        referral.bind(alice, referrer, "https://legacylife.online", NONCE, ISSUED_AT, signed);
+        assertEq(referral.referrerOf(alice), address(0));
+        // its host passed, the scheme is the contract's to write: the signature binds as signed
+        referral.bind(alice, referrer, "legacylife.online", NONCE, ISSUED_AT, signed);
+        assertEq(referral.referrerOf(alice), referrer);
+
+        // any https origin, a subdomain and a port being part of its host
+        bytes memory ported = _signMessage(
+            bobKey, _messageOn("https://play.legacylife.online:8443", "play.legacylife.online:8443", bob, referrer)
+        );
+        referral.bind(bob, referrer, "play.legacylife.online:8443", NONCE, ISSUED_AT, ported);
+        assertEq(referral.referrerOf(bob), referrer);
+
+        // a signature made on an http site has no host that rebuilds it
+        bytes memory plain =
+            _signMessage(carolKey, _messageOn("http://legacylife.online", "legacylife.online", carol, referrer));
+        vm.expectRevert(LLGAMEReferral.InvalidSignature.selector);
+        referral.bind(carol, referrer, "legacylife.online", NONCE, ISSUED_AT, plain);
+        vm.expectRevert(LLGAMEReferral.InvalidSignature.selector);
+        referral.bind(carol, referrer, "http://legacylife.online", NONCE, ISSUED_AT, plain);
+        assertEq(referral.referrerOf(carol), address(0));
     }
 
     /// @dev A binding the account validly signed for, refused by the rule `reason` names; nothing is written.

@@ -15,7 +15,6 @@ contract LLGAMEReferral is ILLGAMEReferral {
 
     error AlreadyBound();
     error InvalidReferrer();
-    error InvalidSite();
     error InvalidSignature();
 
     /// @notice A root search that took more hops than this saves the root it found as the last root of the account
@@ -37,8 +36,9 @@ contract LLGAMEReferral is ILLGAMEReferral {
     mapping(address account => ForestNode) private _nodeOf;
 
     /// @notice Binds `account` to `referrer` on the account's own signature over its agreement: the EIP-4361 message
-    ///         the dApp had it sign as an EIP-191 personal message on `site` (an `https` origin), with `nonce` and
-    ///         `issuedAt` as signed. Any caller; a binding is written once and never closes a cycle.
+    ///         the dApp had it sign as an EIP-191 personal message on the `https` site whose host is `site`, passed
+    ///         without the scheme, with `nonce` and `issuedAt` as signed. Any caller; a binding is written once and
+    ///         never closes a cycle.
     function bind(
         address account,
         address referrer,
@@ -113,8 +113,8 @@ contract LLGAMEReferral is ILLGAMEReferral {
     }
 
     /// @dev The agreement's text, byte for byte as the dApp builds it: the site's host, the account, the statement
-    ///      naming the referrer, the site, this chain, the nonce and the time, and the referrer as its resource; both
-    ///      addresses with their EIP-55 checksum, lines ended with a line feed, the last with none.
+    ///      naming the referrer, the site's `https` origin, this chain, the nonce and the time, and the referrer as
+    ///      its resource; both addresses with their EIP-55 checksum, lines ended with a line feed, the last with none.
     function _agreementMessage(
         address account,
         address referrer,
@@ -126,22 +126,22 @@ contract LLGAMEReferral is ILLGAMEReferral {
         return bytes.concat(_messageUpToUri(account, referrerText, site), _messageFromVersion(nonce, issuedAt), referrerText);
     }
 
-    /// @dev From the host to the `URI` line; the host is the site without its `https://`.
+    /// @dev From the host to the `URI` line, whose origin is the host under the `https` scheme written here: `site`
+    ///      is the host alone, and a signature over a URI of another scheme cannot be rebuilt.
     function _messageUpToUri(address account, bytes memory referrerText, string calldata site)
         private
         pure
         returns (bytes memory)
     {
-        bytes calldata origin = bytes(site);
-        if (origin.length <= 8 || bytes8(origin[:8]) != bytes8("https://")) revert InvalidSite();
+        bytes calldata host = bytes(site);
         return bytes.concat(
-            origin[8:],
+            host,
             " wants you to sign in with your Ethereum account:\n",
             bytes(Strings.toChecksumHexString(account)),
             "\n\nI agree that ",
             referrerText,
-            " is my referrer in Legacy Life Game.\n\nURI: ",
-            origin
+            " is my referrer in Legacy Life Game.\n\nURI: https://",
+            host
         );
     }
 
